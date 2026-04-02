@@ -128,6 +128,25 @@ async def get_user_active_entry(
     return _row_to_dict(await cursor.fetchone())
 
 
+async def get_user_active_entries(user_id: int) -> list[dict[str, Any]]:
+    """Get ALL active entries for a user across all machines today."""
+    db = await get_db()
+    cursor = await db.execute(
+        """
+        SELECT qe.*, u.discord_id, u.discord_name, m.name as machine_name, m.slug as machine_slug
+        FROM queue_entries qe
+        JOIN users u ON u.id = qe.user_id
+        JOIN machines m ON m.id = qe.machine_id
+        WHERE qe.user_id = ?
+          AND qe.status IN ('waiting', 'serving')
+          AND date(qe.joined_at) = date('now')
+        ORDER BY qe.position ASC
+        """,
+        (user_id,),
+    )
+    return _rows_to_dicts(await cursor.fetchall())
+
+
 async def join_queue(user_id: int, machine_id: int) -> dict[str, Any]:
     """Add user to the end of a machine's queue. Returns the new entry."""
     db = await get_db()
@@ -293,6 +312,15 @@ async def mark_reminded(entry_id: int) -> None:
     db = await get_db()
     await db.execute(
         "UPDATE queue_entries SET reminded = 1 WHERE id = ?", (entry_id,)
+    )
+    await db.commit()
+
+
+async def reset_reminder(entry_id: int) -> None:
+    """Reset the reminded flag so the timer restarts."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE queue_entries SET reminded = 0 WHERE id = ?", (entry_id,)
     )
     await db.commit()
 

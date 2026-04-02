@@ -8,6 +8,14 @@ from db import models
 pytestmark = pytest.mark.asyncio
 
 
+# ── Helpers ──────────────────────────────────────────────────────────────
+
+async def _get_entry(db, entry_id):
+    cursor = await db.execute("SELECT * FROM queue_entries WHERE id = ?", (entry_id,))
+    row = await cursor.fetchone()
+    return dict(row)
+
+
 # ── Machine queries ──────────────────────────────────────────────────────
 
 
@@ -213,3 +221,39 @@ async def test_complete_entry_flow(db):
     # Should no longer appear in active queue
     queue = await models.get_queue_for_machine(machine["id"])
     assert len(queue) == 0
+
+
+# ── New model helpers ────────────────────────────────────────────────────
+
+
+async def test_reset_reminder(db):
+    user = await models.get_or_create_user("reset1", "ResetUser")
+    entry = await models.join_queue(user["id"], 1)
+    await models.update_entry_status(entry["id"], "serving")
+    await models.mark_reminded(entry["id"])
+
+    # Verify reminded is 1
+    updated = await _get_entry(db, entry["id"])
+    assert updated["reminded"] == 1
+
+    # Reset it
+    await models.reset_reminder(entry["id"])
+    updated = await _get_entry(db, entry["id"])
+    assert updated["reminded"] == 0
+
+
+async def test_get_user_active_entries(db):
+    user = await models.get_or_create_user("multi1", "MultiUser")
+    await models.join_queue(user["id"], 1)
+    await models.join_queue(user["id"], 2)
+
+    entries = await models.get_user_active_entries(user["id"])
+    assert len(entries) == 2
+    machine_ids = {e["machine_id"] for e in entries}
+    assert machine_ids == {1, 2}
+
+
+async def test_get_user_active_entries_empty(db):
+    user = await models.get_or_create_user("empty1", "EmptyUser")
+    entries = await models.get_user_active_entries(user["id"])
+    assert entries == []
