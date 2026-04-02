@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     queue_channel_id: int = 0
     admin_channel_id: int = 0
 
+    # OpenAI (for DM intent classification)
+    openai_api_key: str = ""
+
     # Database
     database_path: str = "reserv.db"
 
