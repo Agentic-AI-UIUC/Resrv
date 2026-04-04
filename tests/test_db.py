@@ -257,3 +257,56 @@ async def test_get_user_active_entries_empty(db):
     user = await models.get_or_create_user("empty1", "EmptyUser")
     entries = await models.get_user_active_entries(user["id"])
     assert entries == []
+
+
+# ── Verification code helpers ───────────────────────────────────────────
+
+
+async def test_create_verification_code(db):
+    """create_verification_code stores a code and returns it."""
+    result = await models.create_verification_code("disc123", "user@illinois.edu")
+    assert result["discord_id"] == "disc123"
+    assert result["email"] == "user@illinois.edu"
+    assert len(result["code"]) == 6
+    assert result["code"].isdigit()
+    assert result["used"] == 0
+
+
+async def test_verify_code_valid(db):
+    """verify_code returns the row when code matches and is not expired/used."""
+    created = await models.create_verification_code("disc456", "test@illinois.edu")
+    result = await models.verify_code("disc456", created["code"])
+    assert result is not None
+    assert result["email"] == "test@illinois.edu"
+
+
+async def test_verify_code_wrong_code(db):
+    """verify_code returns None for wrong code."""
+    await models.create_verification_code("disc789", "x@illinois.edu")
+    result = await models.verify_code("disc789", "000000")
+    assert result is None
+
+
+async def test_verify_code_already_used(db):
+    """verify_code returns None if code was already used."""
+    created = await models.create_verification_code("discA", "a@illinois.edu")
+    await models.mark_code_used(created["id"])
+    result = await models.verify_code("discA", created["code"])
+    assert result is None
+
+
+async def test_mark_user_verified(db):
+    """mark_user_verified sets email and verified=1 on the user."""
+    user = await models.get_or_create_user("discV", "VerifyUser")
+    await models.mark_user_verified(user["id"], "verified@illinois.edu")
+    updated = await models.get_user_by_discord_id("discV")
+    assert updated["verified"] == 1
+    assert updated["email"] == "verified@illinois.edu"
+
+
+async def test_invalidate_previous_codes(db):
+    """Creating a new code marks all previous codes for that discord_id as used."""
+    first = await models.create_verification_code("discI", "i@illinois.edu")
+    _second = await models.create_verification_code("discI", "i@illinois.edu")
+    result = await models.verify_code("discI", first["code"])
+    assert result is None

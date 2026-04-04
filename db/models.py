@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+import string
 from datetime import datetime, date
 from typing import Any
 
@@ -352,3 +354,65 @@ async def reset_stale_queues() -> int:
     )
     await db.commit()
     return cursor.rowcount
+
+
+# ── Verification ────────────────────────────────────────────────────────
+
+
+async def create_verification_code(discord_id: str, email: str) -> dict[str, Any]:
+    """Generate a 6-digit code, invalidate previous codes, and store it."""
+    db = await get_db()
+    code = "".join(random.choices(string.digits, k=6))
+    expiry_minutes = 10
+
+    # Invalidate any previous unused codes for this user
+    await db.execute(
+        "UPDATE verification_codes SET used = 1 WHERE discord_id = ? AND used = 0",
+        (discord_id,),
+    )
+
+    cursor = await db.execute(
+        """
+        INSERT INTO verification_codes (discord_id, email, code, expires_at)
+        VALUES (?, ?, ?, datetime('now', '+' || ? || ' minutes'))
+        RETURNING *
+        """,
+        (discord_id, email, code, expiry_minutes),
+    )
+    row = dict(await cursor.fetchone())
+    await db.commit()
+    return row
+
+
+async def verify_code(discord_id: str, code: str) -> dict[str, Any] | None:
+    """Check if a valid (not expired, not used) code exists for this user."""
+    db = await get_db()
+    cursor = await db.execute(
+        """
+        SELECT * FROM verification_codes
+        WHERE discord_id = ? AND code = ? AND used = 0
+          AND datetime(expires_at) > datetime('now')
+        ORDER BY id DESC LIMIT 1
+        """,
+        (discord_id, code),
+    )
+    return _row_to_dict(await cursor.fetchone())
+
+
+async def mark_code_used(code_id: int) -> None:
+    """Mark a verification code as used."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE verification_codes SET used = 1 WHERE id = ?", (code_id,)
+    )
+    await db.commit()
+
+
+async def mark_user_verified(user_id: int, email: str) -> None:
+    """Set user as verified with the given email."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE users SET email = ?, verified = 1 WHERE id = ?",
+        (email, user_id),
+    )
+    await db.commit()
