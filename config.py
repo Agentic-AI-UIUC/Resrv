@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     # OpenAI (for DM intent classification)
     openai_api_key: str = ""
 
+    # Email verification (Resend)
+    resend_api_key: str = ""
+    verification_code_expiry_minutes: int = 10
+
     # Database
     database_path: str = "reserv.db"
 
