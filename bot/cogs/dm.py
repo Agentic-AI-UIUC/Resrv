@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 # Available machine slugs for the classifier prompt
-_MACHINE_SLUGS = ["large-format-printer", "laser-cutter", "cnc-router", "water-jet"]
+_MACHINE_SLUGS = ["large-format-printer", "laser-cutter", "cnc-router", "water-jet", "3d-printer", "sewing-machine"]
 
 # Valid intents the classifier can return
 _VALID_INTENTS = {"done", "more_time", "check_position", "leave", "none"}
@@ -37,7 +37,7 @@ reservations via DM.
 You have a warm, casual personality. Keep responses short (1-3 sentences). Use emoji \
 sparingly. Be helpful and encouraging.
 
-Available machines: Large Format Printer, Laser Cutter, CNC Router, Water Jet.
+Available machines: Large Format Printer, Laser Cutter, CNC Router, Water Jet, 3D Printer, Sewing Machine.
 
 When the user's message relates to a queue action, include an "action" in your JSON \
 response. When they're just chatting, set action to "none".
@@ -52,7 +52,7 @@ Actions:
 Respond with ONLY valid JSON (no markdown):
 {"reply": "<your conversational response>", "action": "<action>", "machine": "<slug-or-null>"}
 
-Machine slugs: large-format-printer, laser-cutter, cnc-router, water-jet
+Machine slugs: large-format-printer, laser-cutter, cnc-router, water-jet, 3d-printer, sewing-machine
 Set machine to null if not mentioned or not relevant.
 
 Examples:

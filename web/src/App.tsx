@@ -67,6 +67,11 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* Footer */}
+      <footer className="py-6 text-center text-sm text-gray-400">
+        Built by <span className="font-bold">Agentic AI @ UIUC</span>
+      </footer>
     </div>
   );
 }

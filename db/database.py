@@ -109,12 +109,14 @@ async def _migrate(db: aiosqlite.Connection) -> None:
 
 
 async def _seed_machines(db: aiosqlite.Connection) -> None:
-    """Insert the 4 SCD machines if they don't already exist."""
+    """Insert the SCD machines if they don't already exist."""
     machines = [
         ("Large Format Printer", "large-format-printer"),
         ("Laser Cutter", "laser-cutter"),
         ("CNC Router", "cnc-router"),
         ("Water Jet", "water-jet"),
+        ("3D Printer", "3d-printer"),
+        ("Sewing Machine", "sewing-machine"),
     ]
     for name, slug in machines:
         await db.execute(

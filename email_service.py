@@ -21,7 +21,7 @@ async def send_verification_email(to: str, code: str) -> bool:
 
     try:
         resend.Emails.send({
-            "from": "SCD Queue <verify@scd.illinois.edu>",
+            "from": "SCD Queue <verify@updates.illinois.edu>",
             "to": [to],
             "subject": "Your SCD Queue Verification Code",
             "html": (
