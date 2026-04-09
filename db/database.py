@@ -107,6 +107,38 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     if "embed_message_id" not in columns:
         await db.execute("ALTER TABLE machines ADD COLUMN embed_message_id TEXT")
 
+    # Add signup fields to users if missing
+    cursor = await db.execute("PRAGMA table_info(users)")
+    user_columns = {row[1] for row in await cursor.fetchall()}
+    if "full_name" not in user_columns:
+        await db.execute("ALTER TABLE users ADD COLUMN full_name TEXT")
+    if "graduation_year" not in user_columns:
+        await db.execute("ALTER TABLE users ADD COLUMN graduation_year TEXT")
+    if "registered" not in user_columns:
+        await db.execute(
+            "ALTER TABLE users ADD COLUMN registered INTEGER NOT NULL DEFAULT 0"
+        )
+
+    # Add new analytics columns if missing
+    cursor = await db.execute("PRAGMA table_info(analytics_snapshots)")
+    snap_columns = {row[1] for row in await cursor.fetchall()}
+    if "no_show_count" not in snap_columns:
+        await db.execute(
+            "ALTER TABLE analytics_snapshots ADD COLUMN no_show_count INTEGER NOT NULL DEFAULT 0"
+        )
+    if "cancelled_count" not in snap_columns:
+        await db.execute(
+            "ALTER TABLE analytics_snapshots ADD COLUMN cancelled_count INTEGER NOT NULL DEFAULT 0"
+        )
+    if "unique_users" not in snap_columns:
+        await db.execute(
+            "ALTER TABLE analytics_snapshots ADD COLUMN unique_users INTEGER NOT NULL DEFAULT 0"
+        )
+    if "failure_count" not in snap_columns:
+        await db.execute(
+            "ALTER TABLE analytics_snapshots ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0"
+        )
+
 
 async def _seed_machines(db: aiosqlite.Connection) -> None:
     """Insert the SCD machines if they don't already exist."""

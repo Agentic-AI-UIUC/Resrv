@@ -9,6 +9,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+import re
+
 from config import settings
 from db import models
 
@@ -16,6 +18,8 @@ if TYPE_CHECKING:
     from bot.bot import ReservBot
 
 log = logging.getLogger(__name__)
+
+_ILLINOIS_EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+-]+@illinois\.edu$", re.IGNORECASE)
 
 
 async def _machine_slug_autocomplete(
@@ -45,6 +49,72 @@ def _admin_channel_only() -> app_commands.check:
         return True
 
     return app_commands.check(predicate)
+
+
+class ProfileModal(discord.ui.Modal, title="SCD Queue — Edit Profile"):
+    """Edit profile modal, pre-filled with current data."""
+
+    full_name = discord.ui.TextInput(
+        label="Full Name",
+        placeholder="e.g. Alex Chen",
+        min_length=2,
+        max_length=100,
+    )
+    email = discord.ui.TextInput(
+        label="Email",
+        placeholder="e.g. achen2@illinois.edu",
+        min_length=5,
+        max_length=100,
+    )
+    major = discord.ui.TextInput(
+        label="Major",
+        placeholder="e.g. Computer Science",
+        min_length=2,
+        max_length=100,
+    )
+    college = discord.ui.TextInput(
+        label="College",
+        placeholder="e.g. Grainger Engineering",
+        min_length=2,
+        max_length=100,
+    )
+    graduation_year = discord.ui.TextInput(
+        label="Expected Graduation Year",
+        placeholder="e.g. 2027",
+        min_length=4,
+        max_length=4,
+    )
+
+    def __init__(self, user_id: int) -> None:
+        super().__init__()
+        self._user_id = user_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        email_val = self.email.value.strip()
+        if not _ILLINOIS_EMAIL_RE.match(email_val):
+            await interaction.response.send_message(
+                "Please enter a valid **@illinois.edu** email.", ephemeral=True
+            )
+            return
+
+        year_val = self.graduation_year.value.strip()
+        if not year_val.isdigit() or not (2024 <= int(year_val) <= 2035):
+            await interaction.response.send_message(
+                "Graduation year must be between 2024 and 2035.", ephemeral=True
+            )
+            return
+
+        await models.register_user(
+            user_id=self._user_id,
+            full_name=self.full_name.value.strip(),
+            email=email_val,
+            major=self.major.value.strip(),
+            college=self.college.value.strip(),
+            graduation_year=year_val,
+        )
+        await interaction.response.send_message(
+            "Profile updated!", ephemeral=True
+        )
 
 
 class AdminCog(commands.Cog):
@@ -266,6 +336,34 @@ class AdminCog(commands.Cog):
             colour=discord.Colour.blurple(),
         )
         await interaction.response.send_message(embed=embed)
+
+    # --------------------------------------------------------------------- #
+    # /profile (available to everyone)
+    # --------------------------------------------------------------------- #
+
+    @app_commands.command(
+        name="profile", description="View or edit your SCD profile"
+    )
+    async def profile(self, interaction: discord.Interaction) -> None:
+        user = await models.get_user_by_discord_id(str(interaction.user.id))
+        if user is None:
+            user = await models.get_or_create_user(
+                str(interaction.user.id), interaction.user.display_name
+            )
+
+        modal = ProfileModal(user["id"])
+        if user.get("full_name"):
+            modal.full_name.default = user["full_name"]
+        if user.get("email"):
+            modal.email.default = user["email"]
+        if user.get("major"):
+            modal.major.default = user["major"]
+        if user.get("college"):
+            modal.college.default = user["college"]
+        if user.get("graduation_year"):
+            modal.graduation_year.default = user["graduation_year"]
+
+        await interaction.response.send_modal(modal)
 
 
 async def setup(bot: ReservBot) -> None:

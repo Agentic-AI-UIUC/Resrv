@@ -9,6 +9,7 @@ import discord
 from discord.ext import tasks
 
 from config import settings
+from datetime import datetime, timedelta
 from db import models
 
 if TYPE_CHECKING:
@@ -61,6 +62,7 @@ async def _agent_tick() -> None:
         await _send_reminders()
         await _expire_grace_period()
         await _daily_reset()
+        await _compute_daily_analytics()
     except Exception:
         log.exception("Agent tick failed")
 
@@ -168,6 +170,133 @@ async def _daily_reset() -> None:
     count = await models.reset_stale_queues()
     if count > 0:
         log.info("Daily reset: cancelled %d stale entries", count)
+
+
+# --------------------------------------------------------------------------- #
+# Daily analytics snapshot
+# --------------------------------------------------------------------------- #
+
+_last_snapshot_date: str | None = None
+
+
+async def _compute_daily_analytics() -> None:
+    """Compute and store analytics snapshot for yesterday (once per day)."""
+    global _last_snapshot_date
+
+    yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    if _last_snapshot_date == yesterday:
+        return
+    _last_snapshot_date = yesterday
+
+    existing = await models.get_analytics_snapshots(
+        start_date=yesterday, end_date=yesterday
+    )
+    if existing:
+        return
+
+    from db.database import get_db
+
+    db = await get_db()
+
+    machines = await models.get_machines()
+    for machine in machines:
+        mid = machine["id"]
+
+        cursor = await db.execute(
+            """
+            SELECT
+                COUNT(*) as total_jobs,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_jobs,
+                SUM(CASE WHEN status = 'no_show' THEN 1 ELSE 0 END) as no_show_count,
+                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_count,
+                SUM(CASE WHEN job_successful = 0 THEN 1 ELSE 0 END) as failure_count,
+                COUNT(DISTINCT user_id) as unique_users,
+                AVG(CASE
+                    WHEN serving_at IS NOT NULL
+                    THEN (julianday(serving_at) - julianday(joined_at)) * 24 * 60
+                END) as avg_wait_mins,
+                AVG(CASE
+                    WHEN completed_at IS NOT NULL AND serving_at IS NOT NULL
+                    THEN (julianday(completed_at) - julianday(serving_at)) * 24 * 60
+                END) as avg_serve_mins
+            FROM queue_entries
+            WHERE machine_id = ? AND date(joined_at) = ?
+            """,
+            (mid, yesterday),
+        )
+        row = dict(await cursor.fetchone())
+
+        if row["total_jobs"] == 0:
+            continue
+
+        peak_cursor = await db.execute(
+            """
+            SELECT CAST(strftime('%H', joined_at) AS INTEGER) as hour,
+                   COUNT(*) as cnt
+            FROM queue_entries
+            WHERE machine_id = ? AND date(joined_at) = ?
+            GROUP BY hour ORDER BY cnt DESC LIMIT 1
+            """,
+            (mid, yesterday),
+        )
+        peak_row = await peak_cursor.fetchone()
+        peak_hour = dict(peak_row)["hour"] if peak_row else None
+
+        ai_summary = await _generate_ai_summary(machine["name"], row, yesterday)
+
+        await models.insert_analytics_snapshot(
+            date=yesterday,
+            machine_id=mid,
+            total_jobs=row["total_jobs"],
+            completed_jobs=row["completed_jobs"],
+            avg_wait_mins=row["avg_wait_mins"],
+            avg_serve_mins=row["avg_serve_mins"],
+            peak_hour=peak_hour,
+            ai_summary=ai_summary,
+            no_show_count=row["no_show_count"],
+            cancelled_count=row["cancelled_count"],
+            unique_users=row["unique_users"],
+            failure_count=row["failure_count"],
+        )
+
+    log.info("Analytics snapshots computed for %s", yesterday)
+
+
+async def _generate_ai_summary(
+    machine_name: str, stats: dict, date: str
+) -> str | None:
+    """Generate a natural-language analytics summary using OpenAI."""
+    try:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI()
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a concise analytics assistant for a university maker space. Write a 1-2 sentence summary of the machine usage stats provided.",
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Machine: {machine_name}, Date: {date}\n"
+                        f"Total jobs: {stats['total_jobs']}, "
+                        f"Completed: {stats['completed_jobs']}, "
+                        f"No-shows: {stats['no_show_count']}, "
+                        f"Cancelled: {stats['cancelled_count']}, "
+                        f"Avg wait: {stats['avg_wait_mins']:.1f} min, "
+                        f"Avg serve: {stats['avg_serve_mins']:.1f} min"
+                    ),
+                },
+            ],
+            max_tokens=100,
+        )
+        return response.choices[0].message.content
+    except Exception:
+        log.warning("AI summary generation failed for %s", machine_name)
+        return None
 
 
 # --------------------------------------------------------------------------- #

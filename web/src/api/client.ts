@@ -1,4 +1,10 @@
-import type { Machine, MachineQueue, QueueEntry } from "./types";
+import type {
+  AnalyticsResponse,
+  Machine,
+  MachineQueue,
+  QueueEntry,
+  TodayResponse,
+} from "./types";
 
 const BASE = "/api";
 
@@ -59,3 +65,37 @@ export const bumpEntry = (entryId: number) =>
 // -- Health --
 
 export const fetchHealth = () => request<{ status: string }>("/health");
+
+// -- Analytics --
+
+export const fetchAnalytics = (params?: {
+  period?: string;
+  start_date?: string;
+  end_date?: string;
+}) => {
+  const qs = new URLSearchParams();
+  if (params?.period) qs.set("period", params.period);
+  if (params?.start_date) qs.set("start_date", params.start_date);
+  if (params?.end_date) qs.set("end_date", params.end_date);
+  const query = qs.toString();
+  return request<AnalyticsResponse>(
+    `/analytics/${query ? `?${query}` : ""}`
+  );
+};
+
+export const fetchMachineAnalytics = (
+  machineId: number,
+  params?: { period?: string; start_date?: string; end_date?: string }
+) => {
+  const qs = new URLSearchParams();
+  if (params?.period) qs.set("period", params.period);
+  if (params?.start_date) qs.set("start_date", params.start_date);
+  if (params?.end_date) qs.set("end_date", params.end_date);
+  const query = qs.toString();
+  return request<AnalyticsResponse>(
+    `/analytics/${machineId}${query ? `?${query}` : ""}`
+  );
+};
+
+export const fetchTodayStats = () =>
+  request<TodayResponse>("/analytics/today");

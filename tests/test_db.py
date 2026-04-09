@@ -21,7 +21,7 @@ async def _get_entry(db, entry_id):
 
 async def test_get_machines_returns_seeded(db):
     machines = await models.get_machines()
-    assert len(machines) == 4
+    assert len(machines) == 6
     slugs = [m["slug"] for m in machines]
     assert "laser-cutter" in slugs
     assert "cnc-router" in slugs
@@ -259,54 +259,139 @@ async def test_get_user_active_entries_empty(db):
     assert entries == []
 
 
-# ── Verification code helpers ───────────────────────────────────────────
+# ── Registration helpers ────────────────────────────────────────────────
 
 
-async def test_create_verification_code(db):
-    """create_verification_code stores a code and returns it."""
-    result = await models.create_verification_code("disc123", "user@illinois.edu")
-    assert result["discord_id"] == "disc123"
-    assert result["email"] == "user@illinois.edu"
-    assert len(result["code"]) == 6
-    assert result["code"].isdigit()
-    assert result["used"] == 0
+async def test_register_user(db):
+    """register_user saves profile fields and sets registered=1."""
+    user = await models.get_or_create_user("reg1", "RegUser")
+    assert user.get("registered", 0) == 0
+
+    await models.register_user(
+        user_id=user["id"],
+        full_name="Alex Chen",
+        email="achen2@illinois.edu",
+        major="Computer Science",
+        college="Grainger Engineering",
+        graduation_year="2027",
+    )
+    updated = await models.get_user_by_discord_id("reg1")
+    assert updated["registered"] == 1
+    assert updated["full_name"] == "Alex Chen"
+    assert updated["email"] == "achen2@illinois.edu"
+    assert updated["major"] == "Computer Science"
+    assert updated["college"] == "Grainger Engineering"
+    assert updated["graduation_year"] == "2027"
 
 
-async def test_verify_code_valid(db):
-    """verify_code returns the row when code matches and is not expired/used."""
-    created = await models.create_verification_code("disc456", "test@illinois.edu")
-    result = await models.verify_code("disc456", created["code"])
-    assert result is not None
-    assert result["email"] == "test@illinois.edu"
+async def test_update_user_profile(db):
+    """update_user_profile changes existing fields."""
+    user = await models.get_or_create_user("upd1", "UpdUser")
+    await models.register_user(
+        user_id=user["id"],
+        full_name="Old Name",
+        email="old@illinois.edu",
+        major="Math",
+        college="LAS",
+        graduation_year="2026",
+    )
+    await models.update_user_profile(
+        user_id=user["id"],
+        full_name="New Name",
+        email="new@illinois.edu",
+        major="Physics",
+        college="Grainger Engineering",
+        graduation_year="2028",
+    )
+    updated = await models.get_user_by_discord_id("upd1")
+    assert updated["full_name"] == "New Name"
+    assert updated["email"] == "new@illinois.edu"
+    assert updated["major"] == "Physics"
+    assert updated["college"] == "Grainger Engineering"
+    assert updated["graduation_year"] == "2028"
+    assert updated["registered"] == 1
 
 
-async def test_verify_code_wrong_code(db):
-    """verify_code returns None for wrong code."""
-    await models.create_verification_code("disc789", "x@illinois.edu")
-    result = await models.verify_code("disc789", "000000")
-    assert result is None
+# ── Analytics helpers ───────────────────────────────────────────────────
 
 
-async def test_verify_code_already_used(db):
-    """verify_code returns None if code was already used."""
-    created = await models.create_verification_code("discA", "a@illinois.edu")
-    await models.mark_code_used(created["id"])
-    result = await models.verify_code("discA", created["code"])
-    assert result is None
+async def test_insert_analytics_snapshot(db):
+    """insert_analytics_snapshot stores a row and get_snapshots retrieves it."""
+    await models.insert_analytics_snapshot(
+        date="2026-04-08",
+        machine_id=1,
+        total_jobs=10,
+        completed_jobs=8,
+        avg_wait_mins=5.5,
+        avg_serve_mins=20.0,
+        peak_hour=14,
+        ai_summary="Busy day.",
+        no_show_count=1,
+        cancelled_count=1,
+        unique_users=7,
+        failure_count=0,
+    )
+    rows = await models.get_analytics_snapshots(
+        start_date="2026-04-08", end_date="2026-04-08"
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["total_jobs"] == 10
+    assert row["completed_jobs"] == 8
+    assert row["unique_users"] == 7
+    assert row["no_show_count"] == 1
+    assert row["ai_summary"] == "Busy day."
 
 
-async def test_mark_user_verified(db):
-    """mark_user_verified sets email and verified=1 on the user."""
-    user = await models.get_or_create_user("discV", "VerifyUser")
-    await models.mark_user_verified(user["id"], "verified@illinois.edu")
-    updated = await models.get_user_by_discord_id("discV")
-    assert updated["verified"] == 1
-    assert updated["email"] == "verified@illinois.edu"
+async def test_get_snapshots_date_range(db):
+    """get_analytics_snapshots filters by date range."""
+    for day in ("2026-04-06", "2026-04-07", "2026-04-08"):
+        await models.insert_analytics_snapshot(
+            date=day, machine_id=1, total_jobs=5, completed_jobs=4,
+            avg_wait_mins=3.0, avg_serve_mins=15.0, peak_hour=10,
+            ai_summary="", no_show_count=0, cancelled_count=0,
+            unique_users=3, failure_count=0,
+        )
+    rows = await models.get_analytics_snapshots(
+        start_date="2026-04-07", end_date="2026-04-08"
+    )
+    assert len(rows) == 2
 
 
-async def test_invalidate_previous_codes(db):
-    """Creating a new code marks all previous codes for that discord_id as used."""
-    first = await models.create_verification_code("discI", "i@illinois.edu")
-    _second = await models.create_verification_code("discI", "i@illinois.edu")
-    result = await models.verify_code("discI", first["code"])
-    assert result is None
+async def test_get_snapshots_by_machine(db):
+    """get_analytics_snapshots filters by machine_id."""
+    await models.insert_analytics_snapshot(
+        date="2026-04-08", machine_id=1, total_jobs=5, completed_jobs=4,
+        avg_wait_mins=3.0, avg_serve_mins=15.0, peak_hour=10,
+        ai_summary="", no_show_count=0, cancelled_count=0,
+        unique_users=3, failure_count=0,
+    )
+    await models.insert_analytics_snapshot(
+        date="2026-04-08", machine_id=2, total_jobs=8, completed_jobs=7,
+        avg_wait_mins=4.0, avg_serve_mins=18.0, peak_hour=11,
+        ai_summary="", no_show_count=0, cancelled_count=0,
+        unique_users=5, failure_count=0,
+    )
+    rows = await models.get_analytics_snapshots(
+        start_date="2026-04-08", end_date="2026-04-08", machine_id=2
+    )
+    assert len(rows) == 1
+    assert rows[0]["machine_id"] == 2
+
+
+async def test_compute_live_today_stats(db):
+    """compute_live_today_stats returns current day metrics from queue_entries."""
+    user = await models.get_or_create_user("stats1", "StatsUser")
+    machine = await models.get_machine_by_slug("laser-cutter")
+
+    entry = await models.join_queue(user["id"], machine["id"])
+    await models.update_entry_status(entry["id"], "serving")
+    await models.update_entry_status(entry["id"], "completed", job_successful=1)
+
+    stats = await models.compute_live_today_stats()
+    assert len(stats) > 0
+    machine_stat = next(s for s in stats if s["machine_id"] == machine["id"])
+    assert machine_stat["total_jobs"] >= 1
+    assert machine_stat["completed_jobs"] >= 1
+
+

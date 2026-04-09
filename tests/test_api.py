@@ -26,7 +26,7 @@ async def test_list_machines(client: AsyncClient):
     resp = await client.get("/api/machines/")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 4
+    assert len(data) == 6
     assert all("name" in m for m in data)
 
 
@@ -59,7 +59,7 @@ async def test_list_all_queues(client: AsyncClient):
     resp = await client.get("/api/queue/")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 4
+    assert len(data) == 6
     assert all("entries" in q for q in data)
 
 
@@ -231,3 +231,62 @@ async def test_health_check(client: AsyncClient):
     resp = await client.get("/api/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+# ── Analytics endpoints ─────────────────────────────────────────────────
+
+
+async def test_analytics_empty(client: AsyncClient):
+    resp = await client.get("/api/analytics/?period=day")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["machines"] == []
+
+
+async def test_analytics_with_snapshot(db, client: AsyncClient):
+    await models.insert_analytics_snapshot(
+        date="2026-04-08",
+        machine_id=1,
+        total_jobs=10,
+        completed_jobs=8,
+        avg_wait_mins=5.5,
+        avg_serve_mins=20.0,
+        peak_hour=14,
+        ai_summary="Good day.",
+        no_show_count=1,
+        cancelled_count=1,
+        unique_users=7,
+        failure_count=0,
+    )
+    resp = await client.get("/api/analytics/?start_date=2026-04-08&end_date=2026-04-08")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["machines"]) == 1
+    assert data["summary"]["total_jobs"] == 10
+
+
+async def test_analytics_machine_filter(db, client: AsyncClient):
+    await models.insert_analytics_snapshot(
+        date="2026-04-08", machine_id=1, total_jobs=5, completed_jobs=4,
+        avg_wait_mins=3.0, avg_serve_mins=15.0, peak_hour=10,
+        ai_summary="", no_show_count=0, cancelled_count=0,
+        unique_users=3, failure_count=0,
+    )
+    await models.insert_analytics_snapshot(
+        date="2026-04-08", machine_id=2, total_jobs=8, completed_jobs=7,
+        avg_wait_mins=4.0, avg_serve_mins=18.0, peak_hour=11,
+        ai_summary="", no_show_count=0, cancelled_count=0,
+        unique_users=5, failure_count=0,
+    )
+    resp = await client.get("/api/analytics/2?start_date=2026-04-08&end_date=2026-04-08")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["machines"]) == 1
+    assert data["machines"][0]["machine_id"] == 2
+
+
+async def test_analytics_today(db, client: AsyncClient):
+    resp = await client.get("/api/analytics/today")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "machines" in data

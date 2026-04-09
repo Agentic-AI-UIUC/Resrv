@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
 
-from config import settings
 from db import models
 
 if TYPE_CHECKING:
@@ -16,12 +16,106 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+_ILLINOIS_EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+-]+@illinois\.edu$", re.IGNORECASE)
 
-def _requires_verification(user: dict) -> bool:
-    """Check if the user needs to verify before joining a queue."""
-    if settings.public_mode:
-        return False
-    return not user.get("verified", False)
+
+class SignupModal(discord.ui.Modal, title="SCD Queue — Sign Up"):
+    """Collects user profile info before first queue join."""
+
+    full_name = discord.ui.TextInput(
+        label="Full Name",
+        placeholder="e.g. Alex Chen",
+        min_length=2,
+        max_length=100,
+    )
+    email = discord.ui.TextInput(
+        label="Email",
+        placeholder="e.g. achen2@illinois.edu",
+        min_length=5,
+        max_length=100,
+    )
+    major = discord.ui.TextInput(
+        label="Major",
+        placeholder="e.g. Computer Science",
+        min_length=2,
+        max_length=100,
+    )
+    college = discord.ui.TextInput(
+        label="College",
+        placeholder="e.g. Grainger Engineering",
+        min_length=2,
+        max_length=100,
+    )
+    graduation_year = discord.ui.TextInput(
+        label="Expected Graduation Year",
+        placeholder="e.g. 2027",
+        min_length=4,
+        max_length=4,
+    )
+
+    def __init__(self, bot: ReservBot, user_id: int, machine_id: int) -> None:
+        super().__init__()
+        self._bot = bot
+        self._user_id = user_id
+        self._machine_id = machine_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        email_val = self.email.value.strip()
+        if not _ILLINOIS_EMAIL_RE.match(email_val):
+            await interaction.response.send_message(
+                "Please enter a valid **@illinois.edu** email.", ephemeral=True
+            )
+            return
+
+        year_val = self.graduation_year.value.strip()
+        if not year_val.isdigit() or not (2024 <= int(year_val) <= 2035):
+            await interaction.response.send_message(
+                "Graduation year must be between 2024 and 2035.", ephemeral=True
+            )
+            return
+
+        await models.register_user(
+            user_id=self._user_id,
+            full_name=self.full_name.value.strip(),
+            email=email_val,
+            major=self.major.value.strip(),
+            college=self.college.value.strip(),
+            graduation_year=year_val,
+        )
+
+        machine = await models.get_machine(self._machine_id)
+        if machine is None:
+            await interaction.response.send_message(
+                "Machine not found.", ephemeral=True
+            )
+            return
+
+        existing = await models.get_user_active_entry(self._user_id, self._machine_id)
+        if existing is not None:
+            await interaction.response.send_message(
+                f"You're registered! You're already in the queue for **{machine['name']}**.",
+                ephemeral=True,
+            )
+            return
+
+        entry = await models.join_queue(self._user_id, self._machine_id)
+        position = entry["position"]
+        waiting_count = await models.get_waiting_count(self._machine_id)
+
+        await interaction.response.send_message(
+            f"Welcome! You're registered and joined the queue for **{machine['name']}**!\n"
+            f"Your position: **#{position}** ({waiting_count} waiting)",
+            ephemeral=True,
+        )
+        await self._bot.update_queue_embeds(self._machine_id)
+
+        try:
+            await interaction.user.send(
+                f"You're **#{position}** in the queue for **{machine['name']}**. "
+                f"I'll DM you when it's your turn!"
+            )
+        except discord.Forbidden:
+            pass
 
 
 class QueueCog(commands.Cog):
@@ -88,20 +182,11 @@ class QueueCog(commands.Cog):
             discord_name=interaction.user.display_name,
         )
 
-        # Verification gate
-        if _requires_verification(user):
-            await interaction.response.send_message(
-                "You need to verify your **@illinois.edu** email before joining a queue.\n"
-                "DM me your email address to get started!",
-                ephemeral=True,
+        # Registration gate — show signup modal if not registered
+        if not user.get("registered"):
+            await interaction.response.send_modal(
+                SignupModal(self.bot, user["id"], machine_id)
             )
-            try:
-                await interaction.user.send(
-                    "To join a queue, I need to verify your Illinois email first.\n"
-                    "Just send me your **@illinois.edu** email address right here!"
-                )
-            except discord.Forbidden:
-                pass
             return
 
         # Check for duplicate active entry

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import random
-import string
 from datetime import datetime, date
 from typing import Any
 
@@ -89,6 +87,52 @@ async def get_user_by_discord_id(discord_id: str) -> dict[str, Any] | None:
         "SELECT * FROM users WHERE discord_id = ?", (discord_id,)
     )
     return _row_to_dict(await cursor.fetchone())
+
+
+async def register_user(
+    user_id: int,
+    *,
+    full_name: str,
+    email: str,
+    major: str,
+    college: str,
+    graduation_year: str,
+) -> None:
+    """Save signup profile and mark user as registered."""
+    db = await get_db()
+    await db.execute(
+        """
+        UPDATE users
+        SET full_name = ?, email = ?, major = ?, college = ?,
+            graduation_year = ?, registered = 1
+        WHERE id = ?
+        """,
+        (full_name, email, major, college, graduation_year, user_id),
+    )
+    await db.commit()
+
+
+async def update_user_profile(
+    user_id: int,
+    *,
+    full_name: str,
+    email: str,
+    major: str,
+    college: str,
+    graduation_year: str,
+) -> None:
+    """Update an existing user's profile fields."""
+    db = await get_db()
+    await db.execute(
+        """
+        UPDATE users
+        SET full_name = ?, email = ?, major = ?, college = ?,
+            graduation_year = ?
+        WHERE id = ?
+        """,
+        (full_name, email, major, college, graduation_year, user_id),
+    )
+    await db.commit()
 
 
 # ── Queue Entries ────────────────────────────────────────────────────────
@@ -356,63 +400,108 @@ async def reset_stale_queues() -> int:
     return cursor.rowcount
 
 
-# ── Verification ────────────────────────────────────────────────────────
+# ── Analytics ───────────────────────────────────────────────────────────
 
 
-async def create_verification_code(discord_id: str, email: str) -> dict[str, Any]:
-    """Generate a 6-digit code, invalidate previous codes, and store it."""
+async def insert_analytics_snapshot(
+    *,
+    date: str,
+    machine_id: int,
+    total_jobs: int,
+    completed_jobs: int,
+    avg_wait_mins: float | None,
+    avg_serve_mins: float | None,
+    peak_hour: int | None,
+    ai_summary: str | None,
+    no_show_count: int,
+    cancelled_count: int,
+    unique_users: int,
+    failure_count: int,
+) -> None:
+    """Insert a single analytics snapshot row."""
     db = await get_db()
-    code = "".join(random.choices(string.digits, k=6))
-    expiry_minutes = 10
-
-    # Invalidate any previous unused codes for this user
     await db.execute(
-        "UPDATE verification_codes SET used = 1 WHERE discord_id = ? AND used = 0",
-        (discord_id,),
+        """
+        INSERT INTO analytics_snapshots
+            (date, machine_id, total_jobs, completed_jobs, avg_wait_mins,
+             avg_serve_mins, peak_hour, ai_summary, no_show_count,
+             cancelled_count, unique_users, failure_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (date, machine_id, total_jobs, completed_jobs, avg_wait_mins,
+         avg_serve_mins, peak_hour, ai_summary, no_show_count,
+         cancelled_count, unique_users, failure_count),
     )
+    await db.commit()
 
+
+async def get_analytics_snapshots(
+    *,
+    start_date: str,
+    end_date: str,
+    machine_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Get analytics snapshots for a date range, optionally filtered by machine."""
+    db = await get_db()
+    sql = """
+        SELECT s.*, m.name as machine_name, m.slug as machine_slug
+        FROM analytics_snapshots s
+        JOIN machines m ON m.id = s.machine_id
+        WHERE s.date >= ? AND s.date <= ?
+    """
+    params: list[Any] = [start_date, end_date]
+    if machine_id is not None:
+        sql += " AND s.machine_id = ?"
+        params.append(machine_id)
+    sql += " ORDER BY s.date ASC, s.machine_id ASC"
+    cursor = await db.execute(sql, params)
+    return _rows_to_dicts(await cursor.fetchall())
+
+
+async def compute_live_today_stats() -> list[dict[str, Any]]:
+    """Compute analytics for today from live queue_entries data."""
+    db = await get_db()
     cursor = await db.execute(
         """
-        INSERT INTO verification_codes (discord_id, email, code, expires_at)
-        VALUES (?, ?, ?, datetime('now', '+' || ? || ' minutes'))
-        RETURNING *
-        """,
-        (discord_id, email, code, expiry_minutes),
-    )
-    row = dict(await cursor.fetchone())
-    await db.commit()
-    return row
-
-
-async def verify_code(discord_id: str, code: str) -> dict[str, Any] | None:
-    """Check if a valid (not expired, not used) code exists for this user."""
-    db = await get_db()
-    cursor = await db.execute(
+        SELECT
+            qe.machine_id,
+            m.name as machine_name,
+            m.slug as machine_slug,
+            COUNT(*) as total_jobs,
+            SUM(CASE WHEN qe.status = 'completed' THEN 1 ELSE 0 END) as completed_jobs,
+            SUM(CASE WHEN qe.status = 'no_show' THEN 1 ELSE 0 END) as no_show_count,
+            SUM(CASE WHEN qe.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_count,
+            SUM(CASE WHEN qe.job_successful = 0 THEN 1 ELSE 0 END) as failure_count,
+            COUNT(DISTINCT qe.user_id) as unique_users,
+            AVG(CASE
+                WHEN qe.serving_at IS NOT NULL
+                THEN (julianday(qe.serving_at) - julianday(qe.joined_at)) * 24 * 60
+            END) as avg_wait_mins,
+            AVG(CASE
+                WHEN qe.completed_at IS NOT NULL AND qe.serving_at IS NOT NULL
+                THEN (julianday(qe.completed_at) - julianday(qe.serving_at)) * 24 * 60
+            END) as avg_serve_mins
+        FROM queue_entries qe
+        JOIN machines m ON m.id = qe.machine_id
+        WHERE date(qe.joined_at) = date('now')
+        GROUP BY qe.machine_id
+        ORDER BY qe.machine_id
         """
-        SELECT * FROM verification_codes
-        WHERE discord_id = ? AND code = ? AND used = 0
-          AND datetime(expires_at) > datetime('now')
-        ORDER BY id DESC LIMIT 1
-        """,
-        (discord_id, code),
     )
-    return _row_to_dict(await cursor.fetchone())
+    rows = _rows_to_dicts(await cursor.fetchall())
+    for row in rows:
+        peak_cursor = await db.execute(
+            """
+            SELECT CAST(strftime('%H', qe.joined_at) AS INTEGER) as hour,
+                   COUNT(*) as cnt
+            FROM queue_entries qe
+            WHERE qe.machine_id = ? AND date(qe.joined_at) = date('now')
+            GROUP BY hour ORDER BY cnt DESC LIMIT 1
+            """,
+            (row["machine_id"],),
+        )
+        peak_row = await peak_cursor.fetchone()
+        row["peak_hour"] = dict(peak_row)["hour"] if peak_row else None
+    return rows
 
 
-async def mark_code_used(code_id: int) -> None:
-    """Mark a verification code as used."""
-    db = await get_db()
-    await db.execute(
-        "UPDATE verification_codes SET used = 1 WHERE id = ?", (code_id,)
-    )
-    await db.commit()
-
-
-async def mark_user_verified(user_id: int, email: str) -> None:
-    """Set user as verified with the given email."""
-    db = await get_db()
-    await db.execute(
-        "UPDATE users SET email = ?, verified = 1 WHERE id = ?",
-        (email, user_id),
-    )
-    await db.commit()
