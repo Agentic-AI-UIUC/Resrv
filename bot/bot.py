@@ -169,6 +169,58 @@ class ReservBot(commands.Bot):
             await models.update_machine_embed_message_id(mid, msg.id)
             log.info("Posted embed for %s (msg %d)", machine["name"], msg.id)
 
+        # Reconcile archived machines: delete lingering embeds
+        archived = [
+            m for m in await models.list_machines(include_archived=True)
+            if m.get("archived_at") is not None and m.get("embed_message_id")
+        ]
+        for machine in archived:
+            try:
+                msg = await channel.fetch_message(int(machine["embed_message_id"]))
+                await msg.delete()
+                log.info("Cleaned up stale embed for archived %s", machine["name"])
+            except (discord.NotFound, discord.HTTPException):
+                pass
+            await models.update_machine_embed_message_id(machine["id"], None)
+
+    async def create_queue_embed(self, machine_id: int) -> None:
+        """Post a new embed for ``machine_id``, or update in place if one exists."""
+        channel = self.get_channel(settings.queue_channel_id)
+        if channel is None or not isinstance(channel, discord.TextChannel):
+            return
+        machine = await models.get_machine(machine_id)
+        if machine is None or machine.get("archived_at") is not None:
+            return
+        # If we already know about an embed for this machine, update instead
+        if machine_id in self.embed_messages or machine.get("embed_message_id"):
+            await self.update_queue_embeds(machine_id)
+            return
+        queue = await models.get_queue_for_machine(machine_id)
+        embed = build_machine_embed(machine, queue)
+        view = QueueButtonView(machine_id)
+        msg = await channel.send(embed=embed, view=view)
+        self.embed_messages[machine_id] = msg.id
+        self.add_view(view)
+        await models.update_machine_embed_message_id(machine_id, msg.id)
+        log.info("Created embed for %s (msg %d)", machine["name"], msg.id)
+
+    async def delete_queue_embed(self, message_id: int) -> None:
+        """Delete a previously posted embed message, tolerant to 404."""
+        channel = self.get_channel(settings.queue_channel_id)
+        if channel is None or not isinstance(channel, discord.TextChannel):
+            return
+        try:
+            msg = await channel.fetch_message(message_id)
+            await msg.delete()
+        except discord.NotFound:
+            pass
+        except Exception:
+            log.exception("Failed to delete embed message %d", message_id)
+        # Drop from our in-memory map
+        for mid, mid_msg in list(self.embed_messages.items()):
+            if mid_msg == message_id:
+                del self.embed_messages[mid]
+
     async def update_queue_embeds(self, machine_id: int | None = None) -> None:
         """Edit the pinned embed(s) to reflect current queue state.
 
