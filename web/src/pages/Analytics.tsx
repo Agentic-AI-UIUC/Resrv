@@ -16,24 +16,33 @@ const periods: { label: string; value: AnalyticsPeriod }[] = [
 
 export function Analytics() {
   const [period, setPeriod] = useState<AnalyticsPeriod>("week");
-  const { data, error, loading } = useAnalytics(period);
+  const { data, error, loading, refresh } = useAnalytics(period);
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2">
-        {periods.map((p) => (
-          <button
-            key={p.value}
-            onClick={() => setPeriod(p.value)}
-            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
-              period === p.value
-                ? "bg-indigo-600 text-white"
-                : "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50"
-            }`}
-          >
-            {p.label}
-          </button>
-        ))}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {periods.map((p) => (
+            <button
+              key={p.value}
+              onClick={() => setPeriod(p.value)}
+              className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+                period === p.value
+                  ? "bg-indigo-600 text-white"
+                  : "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50"
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={refresh}
+          disabled={loading}
+          className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 transition-colors cursor-pointer disabled:opacity-50"
+        >
+          {loading ? "Refreshing..." : "Refresh"}
+        </button>
       </div>
 
       {loading && (

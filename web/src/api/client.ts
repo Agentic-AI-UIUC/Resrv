@@ -7,21 +7,49 @@ import type {
 } from "./types";
 
 const BASE = "/api";
+const TOKEN_KEY = "reserv.auth.token";
+
+export function getAuthToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setAuthToken(token: string | null) {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
 
 async function request<T>(
   path: string,
   opts?: RequestInit
 ): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...opts,
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...((opts?.headers as Record<string, string>) ?? {}),
+  };
+  const token = getAuthToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${BASE}${path}`, { ...opts, headers });
+  if (res.status === 401) {
+    setAuthToken(null);
+    throw new Error("Unauthorized");
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail || `HTTP ${res.status}`);
   }
   return res.json();
 }
+
+// -- Auth --
+
+export const login = (username: string, password: string) =>
+  request<{ token: string; username: string }>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+
+export const fetchMe = () =>
+  request<{ username: string; staff_id: number }>("/auth/me");
 
 // -- Machines --
 

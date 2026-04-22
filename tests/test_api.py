@@ -19,6 +19,22 @@ async def client(db) -> AsyncClient:
         yield c
 
 
+@pytest.fixture
+async def admin_headers(db, client: AsyncClient) -> dict[str, str]:
+    """Log in as the seeded default admin and return auth headers."""
+    from config import settings
+    resp = await client.post(
+        "/api/auth/login",
+        json={
+            "username": settings.staff_username,
+            "password": settings.staff_password,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    token = resp.json()["token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 # ── Machine endpoints ────────────────────────────────────────────────────
 
 
@@ -236,14 +252,14 @@ async def test_health_check(client: AsyncClient):
 # ── Analytics endpoints ─────────────────────────────────────────────────
 
 
-async def test_analytics_empty(client: AsyncClient):
-    resp = await client.get("/api/analytics/?period=day")
+async def test_analytics_empty(client: AsyncClient, admin_headers):
+    resp = await client.get("/api/analytics/?period=day", headers=admin_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert data["machines"] == []
 
 
-async def test_analytics_with_snapshot(db, client: AsyncClient):
+async def test_analytics_with_snapshot(db, client: AsyncClient, admin_headers):
     await models.insert_analytics_snapshot(
         date="2026-04-08",
         machine_id=1,
@@ -258,14 +274,17 @@ async def test_analytics_with_snapshot(db, client: AsyncClient):
         unique_users=7,
         failure_count=0,
     )
-    resp = await client.get("/api/analytics/?start_date=2026-04-08&end_date=2026-04-08")
+    resp = await client.get(
+        "/api/analytics/?start_date=2026-04-08&end_date=2026-04-08",
+        headers=admin_headers,
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["machines"]) == 1
     assert data["summary"]["total_jobs"] == 10
 
 
-async def test_analytics_machine_filter(db, client: AsyncClient):
+async def test_analytics_machine_filter(db, client: AsyncClient, admin_headers):
     await models.insert_analytics_snapshot(
         date="2026-04-08", machine_id=1, total_jobs=5, completed_jobs=4,
         avg_wait_mins=3.0, avg_serve_mins=15.0, peak_hour=10,
@@ -278,15 +297,18 @@ async def test_analytics_machine_filter(db, client: AsyncClient):
         ai_summary="", no_show_count=0, cancelled_count=0,
         unique_users=5, failure_count=0,
     )
-    resp = await client.get("/api/analytics/2?start_date=2026-04-08&end_date=2026-04-08")
+    resp = await client.get(
+        "/api/analytics/2?start_date=2026-04-08&end_date=2026-04-08",
+        headers=admin_headers,
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["machines"]) == 1
     assert data["machines"][0]["machine_id"] == 2
 
 
-async def test_analytics_today(db, client: AsyncClient):
-    resp = await client.get("/api/analytics/today")
+async def test_analytics_today(db, client: AsyncClient, admin_headers):
+    resp = await client.get("/api/analytics/today", headers=admin_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert "machines" in data

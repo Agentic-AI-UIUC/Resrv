@@ -1,8 +1,11 @@
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ConnectionStatus } from "./ConnectionStatus";
+import { useAuth } from "../auth/AuthContext";
 
 export function NavBar() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const { username, logout } = useAuth();
 
   const linkClass = (path: string) =>
     `px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
@@ -26,12 +29,39 @@ export function NavBar() {
               <Link to="/" className={linkClass("/")}>
                 Queues
               </Link>
-              <Link to="/analytics" className={linkClass("/analytics")}>
-                Analytics
-              </Link>
+              {username && (
+                <Link to="/analytics" className={linkClass("/analytics")}>
+                  Analytics
+                </Link>
+              )}
             </nav>
           </div>
-          <ConnectionStatus />
+          <div className="flex items-center gap-3">
+            <ConnectionStatus />
+            {username ? (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600">
+                  Signed in as <span className="font-medium">{username}</span>
+                </span>
+                <button
+                  onClick={() => {
+                    logout();
+                    navigate("/");
+                  }}
+                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Logout
+                </button>
+              </div>
+            ) : (
+              <Link
+                to="/login"
+                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+              >
+                Staff Login
+              </Link>
+            )}
+          </div>
         </div>
       </div>
     </header>

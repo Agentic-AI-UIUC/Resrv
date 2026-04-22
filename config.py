@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     # Database
     database_path: str = "reserv.db"
 
+    # Staff auth
+    staff_username: str = "admin"
+    staff_password: str = "changeme"
+    auth_secret: str = "dev-secret-change-me"
+    auth_token_ttl_hours: int = 12
+
     # Queue behaviour
     queue_reset_hour: int = 0  # midnight
     reminder_minutes: int = 30
