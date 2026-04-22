@@ -10,6 +10,7 @@ from discord.ext import tasks
 
 from config import settings
 from datetime import datetime, timedelta
+from api.settings_store import get_setting_int
 from db import models
 
 if TYPE_CHECKING:
@@ -101,10 +102,13 @@ async def _process_machines() -> None:
         )
 
         # DM the user
+        reminder_minutes = await get_setting_int(
+            "reminder_minutes", settings.reminder_minutes
+        )
         await _dm_user(
             next_entry["discord_id"],
             f"You're up! Head to the **{machine['name']}** now. "
-            f"You'll receive a reminder after {settings.reminder_minutes} minutes.",
+            f"You'll receive a reminder after {reminder_minutes} minutes.",
         )
 
         # Update pinned embed
@@ -118,14 +122,20 @@ async def _process_machines() -> None:
 
 async def _send_reminders() -> None:
     """DM users who have been serving longer than ``reminder_minutes``."""
-    entries = await models.get_entries_needing_reminder(settings.reminder_minutes)
+    reminder_minutes = await get_setting_int(
+        "reminder_minutes", settings.reminder_minutes
+    )
+    grace_minutes = await get_setting_int(
+        "grace_minutes", settings.grace_minutes
+    )
+    entries = await models.get_entries_needing_reminder(reminder_minutes)
     for entry in entries:
         await models.mark_reminded(entry["id"])
         await _dm_user(
             entry["discord_id"],
-            f"You've been using the machine for {settings.reminder_minutes} "
+            f"You've been using the machine for {reminder_minutes} "
             f"minutes. Still working? If you don't respond within "
-            f"{settings.grace_minutes} minutes you'll be marked as finished.",
+            f"{grace_minutes} minutes you'll be marked as finished.",
         )
         log.info(
             "Sent reminder to %s (entry %d)", entry["discord_name"], entry["id"]
@@ -138,9 +148,13 @@ async def _send_reminders() -> None:
 
 async def _expire_grace_period() -> None:
     """Auto-complete entries that were reminded but didn't respond in time."""
-    entries = await models.get_entries_past_grace(
-        settings.reminder_minutes, settings.grace_minutes
+    reminder_minutes = await get_setting_int(
+        "reminder_minutes", settings.reminder_minutes
     )
+    grace_minutes = await get_setting_int(
+        "grace_minutes", settings.grace_minutes
+    )
+    entries = await models.get_entries_past_grace(reminder_minutes, grace_minutes)
     for entry in entries:
         await models.update_entry_status(entry["id"], "no_show")
         await _dm_user(
