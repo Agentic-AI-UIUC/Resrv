@@ -5,7 +5,8 @@ import { useAuth } from "../auth/AuthContext";
 export function NavBar() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const { username, logout } = useAuth();
+  const { username, role, logout } = useAuth();
+  const isAdmin = role === "admin";
 
   const linkClass = (path: string) =>
     `px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
@@ -13,6 +14,8 @@ export function NavBar() {
         ? "bg-indigo-100 text-indigo-700"
         : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
     }`;
+
+  const inAdmin = pathname.startsWith("/admin");
 
   return (
     <header className="bg-white border-b border-gray-200 shadow-sm">
@@ -34,6 +37,18 @@ export function NavBar() {
                   Analytics
                 </Link>
               )}
+              {username && (
+                <Link
+                  to="/admin/machines"
+                  className={
+                    inAdmin
+                      ? "px-3 py-1.5 rounded-lg text-sm font-medium bg-indigo-100 text-indigo-700"
+                      : "px-3 py-1.5 rounded-lg text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                  }
+                >
+                  Admin
+                </Link>
+              )}
             </nav>
           </div>
           <div className="flex items-center gap-3">
@@ -41,7 +56,8 @@ export function NavBar() {
             {username ? (
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-600">
-                  Signed in as <span className="font-medium">{username}</span>
+                  {username}
+                  <span className="ml-1 text-xs text-gray-400">({role})</span>
                 </span>
                 <button
                   onClick={() => {
@@ -63,6 +79,26 @@ export function NavBar() {
             )}
           </div>
         </div>
+        {inAdmin && username && (
+          <nav className="mt-3 flex gap-1 border-t border-gray-100 pt-3">
+            <Link to="/admin/machines" className={linkClass("/admin/machines")}>
+              Machines
+            </Link>
+            {isAdmin && (
+              <Link to="/admin/staff" className={linkClass("/admin/staff")}>
+                Staff
+              </Link>
+            )}
+            {isAdmin && (
+              <Link
+                to="/admin/settings"
+                className={linkClass("/admin/settings")}
+              >
+                Settings
+              </Link>
+            )}
+          </nav>
+        )}
       </div>
     </header>
   );

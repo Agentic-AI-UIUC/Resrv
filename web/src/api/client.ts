@@ -18,7 +18,7 @@ export function setAuthToken(token: string | null) {
   else localStorage.removeItem(TOKEN_KEY);
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
   opts?: RequestInit
 ): Promise<T> {
@@ -43,13 +43,18 @@ async function request<T>(
 // -- Auth --
 
 export const login = (username: string, password: string) =>
-  request<{ token: string; username: string }>("/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ username, password }),
-  });
+  request<{ token: string; username: string; role: "admin" | "staff" }>(
+    "/auth/login",
+    {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }
+  );
 
 export const fetchMe = () =>
-  request<{ username: string; staff_id: number }>("/auth/me");
+  request<{ username: string; staff_id: number; role: "admin" | "staff" }>(
+    "/auth/me"
+  );
 
 // -- Machines --
 

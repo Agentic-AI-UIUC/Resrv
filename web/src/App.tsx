@@ -1,9 +1,13 @@
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { NavBar } from "./components/NavBar";
+import { MaintenanceBanner } from "./components/MaintenanceBanner";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { Dashboard } from "./pages/Dashboard";
 import { Analytics } from "./pages/Analytics";
 import { Login } from "./pages/Login";
+import { AdminMachines } from "./pages/admin/Machines";
+import { AdminStaff } from "./pages/admin/Staff";
+import { AdminSettings } from "./pages/admin/Settings";
 
 function RequireStaff({ children }: { children: React.ReactElement }) {
   const { username, loading } = useAuth();
@@ -19,11 +23,25 @@ function RequireStaff({ children }: { children: React.ReactElement }) {
   return children;
 }
 
+function RequireAdmin({ children }: { children: React.ReactElement }) {
+  const { role, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="py-12 text-center text-sm text-gray-500">Loading…</div>
+    );
+  }
+  if (role !== "admin") {
+    return <Navigate to="/admin/machines" replace />;
+  }
+  return children;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
         <div className="min-h-screen bg-gray-100">
+          <MaintenanceBanner />
           <NavBar />
           <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
             <Routes>
@@ -34,6 +52,38 @@ export default function App() {
                 element={
                   <RequireStaff>
                     <Analytics />
+                  </RequireStaff>
+                }
+              />
+              <Route
+                path="/admin"
+                element={<Navigate to="/admin/machines" replace />}
+              />
+              <Route
+                path="/admin/machines"
+                element={
+                  <RequireStaff>
+                    <AdminMachines />
+                  </RequireStaff>
+                }
+              />
+              <Route
+                path="/admin/staff"
+                element={
+                  <RequireStaff>
+                    <RequireAdmin>
+                      <AdminStaff />
+                    </RequireAdmin>
+                  </RequireStaff>
+                }
+              />
+              <Route
+                path="/admin/settings"
+                element={
+                  <RequireStaff>
+                    <RequireAdmin>
+                      <AdminSettings />
+                    </RequireAdmin>
                   </RequireStaff>
                 }
               />

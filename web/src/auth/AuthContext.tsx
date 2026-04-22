@@ -1,8 +1,11 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { fetchMe, getAuthToken, login as apiLogin, setAuthToken } from "../api/client";
 
+export type Role = "admin" | "staff";
+
 type AuthState = {
   username: string | null;
+  role: Role | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
@@ -12,6 +15,7 @@ const AuthCtx = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [username, setUsername] = useState<string | null>(null);
+  const [role, setRole] = useState<Role | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -21,7 +25,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     fetchMe()
-      .then((me) => setUsername(me.username))
+      .then((me) => {
+        setUsername(me.username);
+        setRole(me.role);
+      })
       .catch(() => setAuthToken(null))
       .finally(() => setLoading(false));
   }, []);
@@ -30,15 +37,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const res = await apiLogin(u, p);
     setAuthToken(res.token);
     setUsername(res.username);
+    setRole(res.role);
   }
 
   function logout() {
     setAuthToken(null);
     setUsername(null);
+    setRole(null);
   }
 
   return (
-    <AuthCtx.Provider value={{ username, loading, login, logout }}>
+    <AuthCtx.Provider value={{ username, role, loading, login, logout }}>
       {children}
     </AuthCtx.Provider>
   );
