@@ -135,6 +135,89 @@ async def update_user_profile(
     await db.commit()
 
 
+# ── Staff Users ──────────────────────────────────────────────────────────
+
+async def list_staff() -> list[dict[str, Any]]:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT id, username, role, created_at FROM staff_users ORDER BY id"
+    )
+    return _rows_to_dicts(await cursor.fetchall())
+
+
+async def get_staff(staff_id: int) -> dict[str, Any] | None:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT id, username, role, created_at FROM staff_users WHERE id = ?",
+        (staff_id,),
+    )
+    return _row_to_dict(await cursor.fetchone())
+
+
+async def get_staff_by_username(username: str) -> dict[str, Any] | None:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT id, username, role, created_at, password_hash "
+        "FROM staff_users WHERE username = ?",
+        (username,),
+    )
+    return _row_to_dict(await cursor.fetchone())
+
+
+async def create_staff(
+    username: str, password_hash: str, role: str
+) -> dict[str, Any]:
+    db = await get_db()
+    cursor = await db.execute(
+        "INSERT INTO staff_users (username, password_hash, role) "
+        "VALUES (?, ?, ?) "
+        "RETURNING id, username, role, created_at",
+        (username, password_hash, role),
+    )
+    row = dict(await cursor.fetchone())
+    await db.commit()
+    return row
+
+
+async def update_staff(
+    staff_id: int,
+    *,
+    role: str | None = None,
+    password_hash: str | None = None,
+) -> None:
+    sets: list[str] = []
+    params: list[Any] = []
+    if role is not None:
+        sets.append("role = ?")
+        params.append(role)
+    if password_hash is not None:
+        sets.append("password_hash = ?")
+        params.append(password_hash)
+    if not sets:
+        return
+    params.append(staff_id)
+    db = await get_db()
+    await db.execute(
+        f"UPDATE staff_users SET {', '.join(sets)} WHERE id = ?", params
+    )
+    await db.commit()
+
+
+async def delete_staff(staff_id: int) -> None:
+    db = await get_db()
+    await db.execute("DELETE FROM staff_users WHERE id = ?", (staff_id,))
+    await db.commit()
+
+
+async def count_admins() -> int:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT COUNT(*) AS cnt FROM staff_users WHERE role = 'admin'"
+    )
+    row = await cursor.fetchone()
+    return row["cnt"]
+
+
 # ── Queue Entries ────────────────────────────────────────────────────────
 
 async def get_queue_for_machine(
