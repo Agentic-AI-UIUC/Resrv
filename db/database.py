@@ -41,12 +41,15 @@ async def _create_tables(db: aiosqlite.Connection) -> None:
         CREATE TABLE IF NOT EXISTS machines (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             name             TEXT    NOT NULL,
-            slug             TEXT    UNIQUE NOT NULL,
+            slug             TEXT    NOT NULL,
             status           TEXT    NOT NULL DEFAULT 'active',
             embed_message_id TEXT,
             created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
             archived_at      TEXT
         );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_machines_slug_active
+            ON machines(slug) WHERE archived_at IS NULL;
 
         CREATE TABLE IF NOT EXISTS users (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,

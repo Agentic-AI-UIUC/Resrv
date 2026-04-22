@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, date
 from typing import Any
 
 import aiosqlite
 
 from db.database import get_db
+
+_SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -25,9 +28,136 @@ def _rows_to_dicts(rows: list[aiosqlite.Row]) -> list[dict[str, Any]]:
 # ── Machines ─────────────────────────────────────────────────────────────
 
 async def get_machines() -> list[dict[str, Any]]:
+    """Active (non-archived) machines."""
     db = await get_db()
-    cursor = await db.execute("SELECT * FROM machines ORDER BY id")
+    cursor = await db.execute(
+        "SELECT * FROM machines WHERE archived_at IS NULL ORDER BY id"
+    )
     return _rows_to_dicts(await cursor.fetchall())
+
+
+async def list_machines(include_archived: bool = False) -> list[dict[str, Any]]:
+    db = await get_db()
+    sql = "SELECT * FROM machines"
+    if not include_archived:
+        sql += " WHERE archived_at IS NULL"
+    sql += " ORDER BY id"
+    cursor = await db.execute(sql)
+    return _rows_to_dicts(await cursor.fetchall())
+
+
+async def create_machine(*, name: str, slug: str) -> dict[str, Any]:
+    if not _SLUG_RE.match(slug):
+        raise ValueError(f"Invalid slug: {slug!r}")
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT 1 FROM machines WHERE slug = ? AND archived_at IS NULL",
+        (slug,),
+    )
+    if await cursor.fetchone():
+        raise ValueError(f"Slug already in use: {slug!r}")
+    cursor = await db.execute(
+        "INSERT INTO machines (name, slug) VALUES (?, ?) RETURNING *",
+        (name, slug),
+    )
+    row = dict(await cursor.fetchone())
+    await db.commit()
+    return row
+
+
+async def update_machine(
+    machine_id: int,
+    *,
+    name: str | None = None,
+    slug: str | None = None,
+    status: str | None = None,
+) -> None:
+    sets: list[str] = []
+    params: list[Any] = []
+    if name is not None:
+        sets.append("name = ?")
+        params.append(name)
+    if slug is not None:
+        if not _SLUG_RE.match(slug):
+            raise ValueError(f"Invalid slug: {slug!r}")
+        db = await get_db()
+        cur = await db.execute(
+            "SELECT 1 FROM machines "
+            "WHERE slug = ? AND archived_at IS NULL AND id != ?",
+            (slug, machine_id),
+        )
+        if await cur.fetchone():
+            raise ValueError(f"Slug already in use: {slug!r}")
+        sets.append("slug = ?")
+        params.append(slug)
+    if status is not None:
+        sets.append("status = ?")
+        params.append(status)
+    if not sets:
+        return
+    params.append(machine_id)
+    db = await get_db()
+    await db.execute(
+        f"UPDATE machines SET {', '.join(sets)} WHERE id = ?", params
+    )
+    await db.commit()
+
+
+async def archive_machine(machine_id: int) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE machines SET archived_at = datetime('now'), "
+        "embed_message_id = NULL WHERE id = ?",
+        (machine_id,),
+    )
+    await db.commit()
+
+
+async def restore_machine(machine_id: int) -> None:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT slug FROM machines WHERE id = ?", (machine_id,)
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        raise ValueError("Machine not found")
+    cursor = await db.execute(
+        "SELECT 1 FROM machines WHERE slug = ? AND archived_at IS NULL AND id != ?",
+        (row["slug"], machine_id),
+    )
+    if await cursor.fetchone():
+        raise ValueError(f"Slug already taken: {row['slug']!r}")
+    await db.execute(
+        "UPDATE machines SET archived_at = NULL WHERE id = ?", (machine_id,)
+    )
+    await db.commit()
+
+
+async def purge_machine(machine_id: int) -> dict[str, int]:
+    """Hard-delete machine + cascade queue_entries + analytics_snapshots."""
+    db = await get_db()
+    qe = await db.execute(
+        "DELETE FROM queue_entries WHERE machine_id = ?", (machine_id,)
+    )
+    qe_count = qe.rowcount
+    snap = await db.execute(
+        "DELETE FROM analytics_snapshots WHERE machine_id = ?", (machine_id,)
+    )
+    snap_count = snap.rowcount
+    await db.execute("DELETE FROM machines WHERE id = ?", (machine_id,))
+    await db.commit()
+    return {"queue_entries": qe_count, "analytics_snapshots": snap_count}
+
+
+async def count_active_queue_entries(machine_id: int) -> int:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT COUNT(*) AS cnt FROM queue_entries "
+        "WHERE machine_id = ? AND status IN ('waiting', 'serving')",
+        (machine_id,),
+    )
+    row = await cursor.fetchone()
+    return row["cnt"]
 
 
 async def get_machine(machine_id: int) -> dict[str, Any] | None:
