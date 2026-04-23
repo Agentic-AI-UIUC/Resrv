@@ -11,6 +11,7 @@ function timeAgo(iso: string): string {
 
 interface Props {
   entry: QueueEntry;
+  displayPosition?: number;
   onServe?: () => void;
   onComplete?: (success: boolean) => void;
   onBump?: () => void;
@@ -19,6 +20,7 @@ interface Props {
 
 export function QueueCard({
   entry,
+  displayPosition,
   onServe,
   onComplete,
   onBump,
@@ -41,7 +43,10 @@ export function QueueCard({
             {entry.discord_name ?? "Unknown"}
           </p>
           <p className="text-xs text-gray-500">
-            #{entry.position} &middot; {timeAgo(entry.joined_at)}
+            {entry.status === "serving"
+              ? "serving"
+              : `#${displayPosition ?? entry.position}`}{" "}
+            &middot; {timeAgo(entry.joined_at)}
           </p>
         </div>
         <StatusBadge status={entry.status} />

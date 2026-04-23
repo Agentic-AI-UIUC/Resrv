@@ -128,10 +128,11 @@ export function MachineColumn({ queue, onRefresh }: Props) {
           <div className="border-t border-dashed border-gray-300 my-1" />
         )}
 
-        {waiting.map((entry) => (
+        {waiting.map((entry, i) => (
           <QueueCard
             key={entry.id}
             entry={entry}
+            displayPosition={i + 1}
             onServe={() => act(() => serveEntry(entry.id))}
             onBump={() => act(() => bumpEntry(entry.id))}
             onRemove={() => act(() => leaveEntry(entry.id))}
