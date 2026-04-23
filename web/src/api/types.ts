@@ -14,12 +14,31 @@ export interface QueueEntry {
   discord_name: string | null;
 }
 
+export type UnitStatus = "active" | "maintenance";
+
+export interface MachineUnit {
+  id: number;
+  machine_id: number;
+  label: string;
+  status: UnitStatus;
+  archived_at: string | null;
+  created_at: string;
+}
+
+export interface UnitSummary {
+  id: number;
+  label: string;
+  status: UnitStatus;
+}
+
 export interface Machine {
   id: number;
   name: string;
   slug: string;
   status: "active" | "maintenance" | "offline";
   created_at: string;
+  archived_at?: string | null;
+  units: UnitSummary[];
 }
 
 export interface MachineQueue {

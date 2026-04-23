@@ -1,5 +1,20 @@
 import { request } from "./client";
 
+export type AdminUnit = {
+  id: number;
+  machine_id: number;
+  label: string;
+  status: "active" | "maintenance";
+  archived_at: string | null;
+  created_at: string;
+};
+
+export type UnitSummary = {
+  id: number;
+  label: string;
+  status: "active" | "maintenance";
+};
+
 export type AdminMachine = {
   id: number;
   name: string;
@@ -8,6 +23,7 @@ export type AdminMachine = {
   archived_at: string | null;
   created_at: string;
   embed_message_id?: string | null;
+  units: UnitSummary[];
 };
 
 export const listMachines = (includeArchived = false) =>
@@ -44,6 +60,49 @@ export const purgeMachine = (id: number, confirm_slug: string) =>
 
 export const restoreMachine = (id: number) =>
   request<AdminMachine>(`/machines/${id}/restore`, { method: "POST" });
+
+// ── Machine Units ──
+
+export const listUnits = (machineId: number, includeArchived = false) =>
+  request<AdminUnit[]>(
+    `/machines/${machineId}/units/${includeArchived ? "?include_archived=true" : ""}`
+  );
+
+export const createUnit = (machineId: number, label: string) =>
+  request<AdminUnit>(`/machines/${machineId}/units/`, {
+    method: "POST",
+    body: JSON.stringify({ label }),
+  });
+
+export const patchUnit = (
+  machineId: number,
+  unitId: number,
+  body: Partial<{ label: string; status: "active" | "maintenance" }>
+) =>
+  request<AdminUnit>(`/machines/${machineId}/units/${unitId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+
+export const archiveUnit = (machineId: number, unitId: number) =>
+  request<{ status: string }>(`/machines/${machineId}/units/${unitId}`, {
+    method: "DELETE",
+  });
+
+export const purgeUnit = (
+  machineId: number,
+  unitId: number,
+  confirm_label: string
+) =>
+  request<{ status: string }>(
+    `/machines/${machineId}/units/${unitId}?purge=true`,
+    { method: "DELETE", body: JSON.stringify({ confirm_label }) }
+  );
+
+export const restoreUnit = (machineId: number, unitId: number) =>
+  request<AdminUnit>(`/machines/${machineId}/units/${unitId}/restore`, {
+    method: "POST",
+  });
 
 // ── Staff ──
 
