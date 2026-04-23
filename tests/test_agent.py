@@ -238,6 +238,53 @@ async def test_daily_reset_does_not_touch_today(db):
     assert updated["status"] == "waiting"
 
 
+# ── Capacity (multi-unit) ─────────────────────────────────────────────────
+
+
+async def test_agent_promotes_up_to_unit_capacity(db):
+    """3 active units ⇒ 3 promoted, then queue holds."""
+    machine = await models.get_machine_by_slug("laser-cutter")
+    mid = machine["id"]
+    await models.create_unit(machine_id=mid, label="U2")
+    await models.create_unit(machine_id=mid, label="U3")
+
+    for i in range(5):
+        u = await models.get_or_create_user(str(100 + i), f"user{i}")
+        await models.join_queue(u["id"], mid)
+
+    await _process_machines()
+
+    assert await models.count_serving_on_machine(mid) == 3
+
+    from db.database import get_db
+    conn = await get_db()
+    cursor = await conn.execute(
+        "SELECT unit_id FROM queue_entries "
+        "WHERE machine_id = ? AND status = 'serving'",
+        (mid,),
+    )
+    unit_ids = [r["unit_id"] for r in await cursor.fetchall()]
+    assert None not in unit_ids
+    assert len(set(unit_ids)) == 3
+
+
+async def test_agent_respects_maintenance_unit(db):
+    """A maintenance unit doesn't count toward capacity."""
+    machine = await models.get_machine_by_slug("laser-cutter")
+    mid = machine["id"]
+    await models.create_unit(machine_id=mid, label="U2")
+    u3 = await models.create_unit(machine_id=mid, label="U3")
+    await models.update_unit(u3["id"], status="maintenance")
+
+    for i in range(3):
+        user = await models.get_or_create_user(str(200 + i), f"m{i}")
+        await models.join_queue(user["id"], mid)
+
+    await _process_machines()
+
+    assert await models.count_serving_on_machine(mid) == 2
+
+
 # ── Test helper ──────────────────────────────────────────────────────────
 
 

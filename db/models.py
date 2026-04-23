@@ -313,6 +313,50 @@ async def restore_unit(unit_id: int) -> None:
     await db.commit()
 
 
+async def count_active_units(machine_id: int) -> int:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT COUNT(*) AS cnt FROM machine_units "
+        "WHERE machine_id = ? AND status = 'active' AND archived_at IS NULL",
+        (machine_id,),
+    )
+    return (await cursor.fetchone())["cnt"]
+
+
+async def count_serving_on_machine(machine_id: int) -> int:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT COUNT(*) AS cnt FROM queue_entries "
+        "WHERE machine_id = ? AND status = 'serving' "
+        "AND date(joined_at) = date('now')",
+        (machine_id,),
+    )
+    return (await cursor.fetchone())["cnt"]
+
+
+async def first_available_unit(machine_id: int) -> dict[str, Any] | None:
+    """First active unit with no serving entry today."""
+    db = await get_db()
+    cursor = await db.execute(
+        """
+        SELECT u.* FROM machine_units u
+        WHERE u.machine_id = ?
+          AND u.status = 'active'
+          AND u.archived_at IS NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM queue_entries qe
+              WHERE qe.unit_id = u.id
+                AND qe.status = 'serving'
+                AND date(qe.joined_at) = date('now')
+          )
+        ORDER BY u.id ASC
+        LIMIT 1
+        """,
+        (machine_id,),
+    )
+    return _row_to_dict(await cursor.fetchone())
+
+
 async def purge_unit(unit_id: int) -> None:
     """Hard-delete a unit. Nulls unit_id on historical queue_entries first."""
     db = await get_db()

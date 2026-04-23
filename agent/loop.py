@@ -80,39 +80,50 @@ async def _before_agent_tick() -> None:
 # --------------------------------------------------------------------------- #
 
 async def _process_machines() -> None:
-    """For each active machine, advance the queue if no one is being served."""
+    """For each active machine, promote waiting users until capacity is full."""
     machines = await models.get_machines()
     for machine in machines:
         if machine["status"] != "active":
             continue
 
-        serving = await models.get_serving_entry(machine["id"])
-        if serving is not None:
-            continue  # someone is already being served
+        capacity = await models.count_active_units(machine["id"])
+        if capacity == 0:
+            continue
 
-        next_entry = await models.get_next_waiting(machine["id"])
-        if next_entry is None:
-            continue  # queue is empty
+        serving = await models.count_serving_on_machine(machine["id"])
+        promoted_any = False
+        while serving < capacity:
+            next_entry = await models.get_next_waiting(machine["id"])
+            if next_entry is None:
+                break
+            unit = await models.first_available_unit(machine["id"])
+            if unit is None:
+                break
 
-        await models.update_entry_status(next_entry["id"], "serving")
-        log.info(
-            "Advanced queue: %s now serving on %s",
-            next_entry["discord_name"],
-            machine["name"],
-        )
+            await models.update_entry_status(
+                next_entry["id"], "serving", unit_id=unit["id"]
+            )
+            log.info(
+                "Advanced queue: %s on %s / %s",
+                next_entry["discord_name"], machine["name"], unit["label"],
+            )
 
-        # DM the user
-        reminder_minutes = await get_setting_int(
-            "reminder_minutes", settings.reminder_minutes
-        )
-        await _dm_user(
-            next_entry["discord_id"],
-            f"You're up! Head to the **{machine['name']}** now. "
-            f"You'll receive a reminder after {reminder_minutes} minutes.",
-        )
+            unit_suffix = (
+                "" if unit["label"] == "Main"
+                else f" (use the **{unit['label']}**)"
+            )
+            reminder_minutes = await get_setting_int(
+                "reminder_minutes", settings.reminder_minutes
+            )
+            await _dm_user(
+                next_entry["discord_id"],
+                f"You're up! Head to the **{machine['name']}**{unit_suffix} now. "
+                f"You'll receive a reminder after {reminder_minutes} minutes.",
+            )
+            serving += 1
+            promoted_any = True
 
-        # Update pinned embed
-        if _bot is not None:
+        if promoted_any and _bot is not None:
             await _bot.update_queue_embeds(machine["id"])
 
 
