@@ -10,6 +10,7 @@ export interface QueueEntry {
   reminded: number;
   job_successful: number | null;
   failure_notes: string | null;
+  unit_id: number | null;
   discord_id: string | null;
   discord_name: string | null;
 }
@@ -47,6 +48,7 @@ export interface MachineQueue {
   machine_slug: string;
   machine_status: string;
   entries: QueueEntry[];
+  units: UnitSummary[];
 }
 
 // ── Analytics ───────────────────────────────────────────────────────────
