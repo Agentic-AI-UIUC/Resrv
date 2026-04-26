@@ -168,3 +168,78 @@ async def test_post_chat_503_when_openai_key_missing(client, db, monkeypatch):
         "/api/analytics/chat", headers=h, json={"message": "hi"}
     )
     assert r.status_code == 503
+
+
+# ── Cross-user isolation ─────────────────────────────────────────────────
+
+
+async def _seed_eve(db, client):
+    await db.execute(
+        "INSERT INTO staff_users (username, password_hash, role) VALUES (?, ?, ?)",
+        ("eve", hash_password("pw"), "staff"),
+    )
+    await db.commit()
+    r = await client.post(
+        "/api/auth/login", json={"username": "eve", "password": "pw"}
+    )
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
+async def test_list_conversations_only_returns_own(client, db, mock_openai):
+    h_admin = await _admin_headers(client)
+    await client.post(
+        "/api/analytics/chat", headers=h_admin, json={"message": "admin q"}
+    )
+
+    h_eve = await _seed_eve(db, client)
+    eve_list = await client.get(
+        "/api/analytics/chat/conversations", headers=h_eve
+    )
+    assert eve_list.status_code == 200
+    assert eve_list.json() == []
+
+
+async def test_get_conversation_404_for_other_owner(client, db, mock_openai):
+    h_admin = await _admin_headers(client)
+    r = await client.post(
+        "/api/analytics/chat", headers=h_admin, json={"message": "secret"}
+    )
+    cid = r.json()["conversation_id"]
+
+    h_eve = await _seed_eve(db, client)
+    r = await client.get(
+        f"/api/analytics/chat/conversations/{cid}", headers=h_eve
+    )
+    assert r.status_code == 404
+
+
+async def test_delete_conversation_owner_succeeds(client, db, mock_openai):
+    h = await _admin_headers(client)
+    r = await client.post(
+        "/api/analytics/chat", headers=h, json={"message": "delete me"}
+    )
+    cid = r.json()["conversation_id"]
+
+    r = await client.delete(
+        f"/api/analytics/chat/conversations/{cid}", headers=h
+    )
+    assert r.status_code == 200
+
+    r = await client.get(
+        f"/api/analytics/chat/conversations/{cid}", headers=h
+    )
+    assert r.status_code == 404
+
+
+async def test_delete_conversation_404_for_other_owner(client, db, mock_openai):
+    h_admin = await _admin_headers(client)
+    r = await client.post(
+        "/api/analytics/chat", headers=h_admin, json={"message": "x"}
+    )
+    cid = r.json()["conversation_id"]
+
+    h_eve = await _seed_eve(db, client)
+    r = await client.delete(
+        f"/api/analytics/chat/conversations/{cid}", headers=h_eve
+    )
+    assert r.status_code == 404
