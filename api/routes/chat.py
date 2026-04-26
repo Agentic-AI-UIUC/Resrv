@@ -33,15 +33,9 @@ HISTORY_LIMIT = 8
 # the still-available legacy 4.x families. Order is "newest first" so the
 # default GPT-5.4-mini sits near the top of the dropdown.
 ALLOWED_MODELS: list[dict[str, str]] = [
-    {"id": "gpt-5.5",       "label": "GPT-5.5 (flagship)"},
     {"id": "gpt-5.4",       "label": "GPT-5.4 (balanced)"},
     {"id": "gpt-5.4-mini",  "label": "GPT-5.4 mini (default — fast, cheap)"},
-    {"id": "gpt-5.4-nano",  "label": "GPT-5.4 nano (cheapest)"},
-    {"id": "gpt-4.1",       "label": "GPT-4.1 (legacy)"},
-    {"id": "gpt-4.1-mini",  "label": "GPT-4.1 mini (legacy)"},
     {"id": "gpt-4o",        "label": "GPT-4o (legacy)"},
-    {"id": "gpt-4o-mini",   "label": "GPT-4o mini (legacy)"},
-    {"id": "o3-mini",       "label": "o3-mini (reasoning)"},
 ]
 _ALLOWED_MODEL_IDS = {m["id"] for m in ALLOWED_MODELS}
 

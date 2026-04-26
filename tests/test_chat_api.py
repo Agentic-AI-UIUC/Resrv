@@ -167,7 +167,7 @@ async def test_get_models_returns_allowlist(client, db):
     body = r.json()
     assert body["default"] == "gpt-5.4-mini"
     ids = [m["id"] for m in body["models"]]
-    assert "gpt-5.4-mini" in ids and "gpt-5.5" in ids and "gpt-4o" in ids
+    assert ids == ["gpt-5.4", "gpt-5.4-mini", "gpt-4o"]
 
 
 async def test_post_chat_uses_default_model_when_unspecified(
