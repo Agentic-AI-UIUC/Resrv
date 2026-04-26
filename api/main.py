@@ -19,6 +19,7 @@ from api.routes.queue import router as queue_router
 from api.routes.settings import public_router as public_settings_router, router as settings_router
 from api.routes.staff import router as staff_router
 from api.routes.units import router as units_router
+from api.routes.chat import router as chat_router
 
 app = FastAPI(title="Reserv API")
 
@@ -42,6 +43,7 @@ app.include_router(settings_router)
 app.include_router(public_settings_router)
 app.include_router(staff_router)
 app.include_router(units_router)
+app.include_router(chat_router)
 
 
 # ── Health check ─────────────────────────────────────────────────────────

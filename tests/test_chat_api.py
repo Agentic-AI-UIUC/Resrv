@@ -1,0 +1,170 @@
+"""POST /api/analytics/chat with a mocked OpenAI client."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from api.auth import hash_password
+from api.main import app
+from config import settings as cfg
+
+pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture
+async def client(db) -> AsyncClient:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        yield c
+
+
+async def _admin_headers(client):
+    r = await client.post(
+        "/api/auth/login",
+        json={"username": cfg.staff_username, "password": cfg.staff_password},
+    )
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
+@pytest.fixture
+def mock_openai(monkeypatch):
+    """Replace _make_openai_client with a stub returning a canned reply."""
+    captured: dict = {}
+
+    def _fake_client_factory():
+        client_obj = MagicMock()
+
+        async def _create(**kwargs):
+            captured["call"] = kwargs
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Mock answer.", tool_calls=None,
+                        )
+                    )
+                ]
+            )
+
+        client_obj.chat.completions.create = _create
+        return client_obj
+
+    from api.routes import chat as chat_mod
+    monkeypatch.setattr(chat_mod, "_make_openai_client", _fake_client_factory)
+    return captured
+
+
+async def test_post_chat_creates_conversation_and_returns_reply(
+    client, db, mock_openai
+):
+    h = await _admin_headers(client)
+    r = await client.post(
+        "/api/analytics/chat",
+        headers=h,
+        json={"message": "Summarize this period.", "period": "week"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["conversation_id"] > 0
+    assert body["message"]["role"] == "assistant"
+    assert body["message"]["content"] == "Mock answer."
+
+
+async def test_post_chat_persists_user_and_assistant_messages(
+    client, db, mock_openai
+):
+    h = await _admin_headers(client)
+    r = await client.post(
+        "/api/analytics/chat",
+        headers=h,
+        json={"message": "What was the busiest day?"},
+    )
+    cid = r.json()["conversation_id"]
+    full = await client.get(
+        f"/api/analytics/chat/conversations/{cid}", headers=h
+    )
+    msgs = full.json()["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant"]
+    assert msgs[0]["content"] == "What was the busiest day?"
+    assert msgs[1]["content"] == "Mock answer."
+
+
+async def test_post_chat_appends_to_existing_conversation(
+    client, db, mock_openai
+):
+    h = await _admin_headers(client)
+    r = await client.post(
+        "/api/analytics/chat", headers=h, json={"message": "first"}
+    )
+    cid = r.json()["conversation_id"]
+    await client.post(
+        "/api/analytics/chat",
+        headers=h,
+        json={"conversation_id": cid, "message": "second"},
+    )
+    full = await client.get(
+        f"/api/analytics/chat/conversations/{cid}", headers=h
+    )
+    contents = [m["content"] for m in full.json()["messages"]]
+    assert contents == ["first", "Mock answer.", "second", "Mock answer."]
+
+
+async def test_post_chat_caps_history_at_8(client, db, mock_openai):
+    h = await _admin_headers(client)
+    r = await client.post(
+        "/api/analytics/chat", headers=h, json={"message": "m1"}
+    )
+    cid = r.json()["conversation_id"]
+    for i in range(2, 11):
+        await client.post(
+            "/api/analytics/chat",
+            headers=h,
+            json={"conversation_id": cid, "message": f"m{i}"},
+        )
+    sent_messages = mock_openai["call"]["messages"]
+    assert len(sent_messages) <= 10  # 1 system + up to 8 history + 1 latest
+    user_contents = [m["content"] for m in sent_messages if m["role"] == "user"]
+    assert "m1" not in user_contents
+
+
+async def test_post_chat_includes_analytics_in_system_prompt(
+    client, db, mock_openai
+):
+    h = await _admin_headers(client)
+    await client.post(
+        "/api/analytics/chat",
+        headers=h,
+        json={"message": "anything", "period": "week"},
+    )
+    sys_msg = mock_openai["call"]["messages"][0]
+    assert sys_msg["role"] == "system"
+    assert "period: week" in sys_msg["content"]
+    assert "data:" in sys_msg["content"]
+
+
+async def test_post_chat_requires_staff(client, db):
+    r = await client.post("/api/analytics/chat", json={"message": "hi"})
+    assert r.status_code == 401
+
+
+async def test_post_chat_rejects_empty_message(client, db, mock_openai):
+    h = await _admin_headers(client)
+    r = await client.post(
+        "/api/analytics/chat", headers=h, json={"message": "   "}
+    )
+    assert r.status_code == 400
+
+
+async def test_post_chat_503_when_openai_key_missing(client, db, monkeypatch):
+    from api.routes import chat as chat_mod
+    monkeypatch.setattr(chat_mod, "_make_openai_client", lambda: None)
+    h = await _admin_headers(client)
+    r = await client.post(
+        "/api/analytics/chat", headers=h, json={"message": "hi"}
+    )
+    assert r.status_code == 503
