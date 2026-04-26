@@ -1,5 +1,25 @@
 # Short-term Memory
 
+## 2026-04-26 — Analytics Chatbot
+Shipped on `feat/customizable-admin`. 162 tests passing, tsc clean.
+
+**Backend:**
+- New tables `chat_conversations` (id, staff_user_id FK, title, timestamps) and `chat_messages` (id, conversation_id FK ON DELETE CASCADE, role CHECK, content, tool_call_id, tool_calls_json — last two are scaffolding for v2 tool use). Index `idx_chat_msgs_conv` on `(conversation_id, id)`.
+- `db/models.py` chat helpers: `create_conversation`, `list_conversations`, `get_conversation`, `get_conversation_messages` (returns None for non-owners — distinct from "empty"), `get_recent_messages` (last N oldest-first), `append_message` (bumps `updated_at`), `delete_conversation` (returns bool).
+- `api/routes/analytics.py` refactored: extracted `compute_analytics_response(period, start, end, machine_id=None)` so chat and dashboard GETs share one source of truth.
+- `api/routes/chat.py` (new): `POST /api/analytics/chat`, `GET /chat/conversations`, `GET /chat/conversations/{id}`, `DELETE /chat/conversations/{id}`. All gated by `require_staff`. OpenAI `gpt-4o-mini`, `_make_openai_client()` lazy factory (mirrors `agent/loop.py::_generate_ai_summary` — missing key returns 503 instead of crashing). System prompt embeds the analytics blob; conversation history capped at last 8 messages. Oversized blob → drop `daily_breakdown` → drop per-machine `ai_summary` → 413.
+
+**Frontend:**
+- `ChatMessage`/`ChatConversationSummary`/`ChatConversationDetail`/`ChatPostRequest`/`ChatPostResponse` types in `web/src/api/types.ts`. `postChat` / `listChatConversations` / `getChatConversation` / `deleteChatConversation` in `web/src/api/client.ts`.
+- New dep `react-markdown` for assistant replies.
+- New `web/src/components/analytics/AnalyticsChat.tsx`: floating "Ask the data" pill (bottom-right) → 380×560 panel. Conversation list (☰), New chat (+), suggested prompts on empty state, optimistic user bubble, three-dot pulse while waiting, scoped-to-period header. Mounted in `web/src/pages/Analytics.tsx`.
+
+**Auth & scope:** Conversations strictly per-`staff_user_id`. Other-owner reads/deletes return 404 (not 403) to avoid leaking existence.
+
+**Docs:**
+- Design: `docs/plans/2026-04-26-analytics-chatbot-design.md`.
+- Plan: `docs/plans/2026-04-26-analytics-chatbot.md` (8 tasks, all done).
+
 ## 2026-04-22 — Multi-Unit Machines
 Shipped on `feat/customizable-admin`. 138 tests passing, tsc clean.
 

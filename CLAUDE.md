@@ -49,6 +49,13 @@ Update `memory.md` whenever something significant changes. Read it at the start 
 - 51 tests passing across DB, API, and agent layers
 - Deferred: email verification, AI analytics, React dashboard, WebSocket real-time
 
+### 2026-04-26 — Analytics Chatbot
+- New `chat_conversations` + `chat_messages` tables (FK + `ON DELETE CASCADE`, role CHECK constraint, scaffolding columns for future tool-use).
+- Per-staff scoped multi-turn chat at `/api/analytics/chat` (POST + list/get/delete) gated by `require_staff`. OpenAI `gpt-4o-mini`, lazy-instantiated client (degrades to 503 if key missing).
+- System prompt embeds the same `compute_analytics_response` payload the dashboard renders, so chat answers can never diverge from the visible data. Last 8 messages reach the model; the full thread persists.
+- Floating "Ask the data" panel mounted on `/admin/analytics`: conversation list, suggested prompts, optimistic UI, markdown-rendered assistant replies via `react-markdown`.
+- 12 chat tests added (DB + API + cross-user isolation).
+
 ### 2026-04-22 — Multi-Unit Machines
 - New `machine_units` table; every existing machine backfilled with one "Main" unit. `queue_entries.unit_id` stamped on promotion.
 - Agent now promotes up to `count_active_units(machine)` in parallel; auto-assigns the first active unit without a live serving entry. Maintenance units exclude themselves from capacity.
