@@ -100,3 +100,39 @@ export interface TodayResponse {
 }
 
 export type AnalyticsPeriod = "day" | "week" | "month";
+
+// ── Analytics chatbot ───────────────────────────────────────────────────
+
+export interface ChatMessage {
+  id: number;
+  conversation_id: number;
+  role: "user" | "assistant" | "system" | "tool";
+  content: string;
+  created_at: string;
+}
+
+export interface ChatConversationSummary {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatConversationDetail {
+  id: number;
+  title: string;
+  messages: ChatMessage[];
+}
+
+export interface ChatPostRequest {
+  conversation_id?: number;
+  message: string;
+  period?: AnalyticsPeriod;
+  start_date?: string;
+  end_date?: string;
+}
+
+export interface ChatPostResponse {
+  conversation_id: number;
+  message: ChatMessage;
+}

@@ -1,5 +1,9 @@
 import type {
   AnalyticsResponse,
+  ChatConversationDetail,
+  ChatConversationSummary,
+  ChatPostRequest,
+  ChatPostResponse,
   Machine,
   MachineQueue,
   QueueEntry,
@@ -132,3 +136,22 @@ export const fetchMachineAnalytics = (
 
 export const fetchTodayStats = () =>
   request<TodayResponse>("/analytics/today");
+
+// -- Analytics chatbot --
+
+export const postChat = (body: ChatPostRequest) =>
+  request<ChatPostResponse>("/analytics/chat", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const listChatConversations = () =>
+  request<ChatConversationSummary[]>("/analytics/chat/conversations");
+
+export const getChatConversation = (id: number) =>
+  request<ChatConversationDetail>(`/analytics/chat/conversations/${id}`);
+
+export const deleteChatConversation = (id: number) =>
+  request<{ status: string }>(`/analytics/chat/conversations/${id}`, {
+    method: "DELETE",
+  });
