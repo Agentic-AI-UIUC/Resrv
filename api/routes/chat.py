@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from api.auth import require_staff
@@ -122,15 +123,49 @@ def _trim_analytics_for_tokens(blob: dict[str, Any]) -> dict[str, Any]:
 async def chat(
     body: ChatRequest, payload: dict[str, Any] = Depends(require_staff)
 ) -> dict:
-    user_message = body.message.strip()
-    if not user_message:
-        raise HTTPException(status_code=400, detail="message must be non-empty")
-
     client = _make_openai_client()
     if client is None:
         raise HTTPException(status_code=503, detail="Chat is not configured")
 
-    staff_id = payload["sub"]
+    conversation_id, openai_messages = await _build_chat_request(
+        body, payload["sub"]
+    )
+
+    try:
+        response = await client.chat.completions.create(
+            model=CHAT_MODEL,
+            messages=openai_messages,
+            max_tokens=600,
+            temperature=0.2,
+        )
+    except Exception as e:
+        log.exception("OpenAI chat failure")
+        raise HTTPException(status_code=502, detail=f"Upstream model error: {e}")
+
+    content = (response.choices[0].message.content or "").strip() or "(no response)"
+    saved = await models.append_message(
+        conversation_id, role="assistant", content=content
+    )
+    return {
+        "conversation_id": conversation_id,
+        "message": {
+            "id": saved["id"],
+            "conversation_id": conversation_id,
+            "role": saved["role"],
+            "content": saved["content"],
+            "created_at": saved["created_at"],
+        },
+    }
+
+
+async def _build_chat_request(body: ChatRequest, staff_id: int) -> tuple[int, list[dict]]:
+    """Resolve conversation, persist user message, build OpenAI messages list.
+
+    Returns (conversation_id, openai_messages). Raises HTTPException on validation.
+    """
+    user_message = body.message.strip()
+    if not user_message:
+        raise HTTPException(status_code=400, detail="message must be non-empty")
 
     if body.conversation_id is not None:
         conv = await models.get_conversation(
@@ -168,31 +203,69 @@ async def chat(
         if m["role"] in {"user", "assistant"}:
             openai_messages.append({"role": m["role"], "content": m["content"]})
 
-    try:
-        response = await client.chat.completions.create(
-            model=CHAT_MODEL,
-            messages=openai_messages,
-            max_tokens=600,
-            temperature=0.2,
-        )
-    except Exception as e:
-        log.exception("OpenAI chat failure")
-        raise HTTPException(status_code=502, detail=f"Upstream model error: {e}")
+    return conversation_id, openai_messages
 
-    content = (response.choices[0].message.content or "").strip() or "(no response)"
-    saved = await models.append_message(
-        conversation_id, role="assistant", content=content
+
+@router.post("/stream")
+async def chat_stream(
+    body: ChatRequest, payload: dict[str, Any] = Depends(require_staff)
+):
+    """Stream the assistant reply as Server-Sent Events.
+
+    Event types (all JSON-encoded after `data: `):
+      - {"type": "meta", "conversation_id": int}
+      - {"type": "delta", "content": "..."}    (zero or more)
+      - {"type": "done",  "message_id": int}
+      - {"type": "error", "detail": "..."}
+    """
+    client = _make_openai_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Chat is not configured")
+
+    conversation_id, openai_messages = await _build_chat_request(
+        body, payload["sub"]
     )
-    return {
-        "conversation_id": conversation_id,
-        "message": {
-            "id": saved["id"],
-            "conversation_id": conversation_id,
-            "role": saved["role"],
-            "content": saved["content"],
-            "created_at": saved["created_at"],
+
+    async def _gen():
+        def _evt(obj: dict[str, Any]) -> bytes:
+            return f"data: {json.dumps(obj)}\n\n".encode("utf-8")
+
+        yield _evt({"type": "meta", "conversation_id": conversation_id})
+
+        full = []
+        try:
+            stream = await client.chat.completions.create(
+                model=CHAT_MODEL,
+                messages=openai_messages,
+                max_tokens=600,
+                temperature=0.2,
+                stream=True,
+            )
+            async for chunk in stream:
+                delta = chunk.choices[0].delta
+                piece = getattr(delta, "content", None) or ""
+                if piece:
+                    full.append(piece)
+                    yield _evt({"type": "delta", "content": piece})
+        except Exception as e:
+            log.exception("OpenAI streaming failure")
+            yield _evt({"type": "error", "detail": f"Upstream model error: {e}"})
+            return
+
+        content = "".join(full).strip() or "(no response)"
+        saved = await models.append_message(
+            conversation_id, role="assistant", content=content
+        )
+        yield _evt({"type": "done", "message_id": saved["id"]})
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
         },
-    }
+    )
 
 
 @router.get("/conversations", response_model=list[ConversationSummaryOut])

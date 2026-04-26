@@ -231,6 +231,76 @@ async def test_delete_conversation_owner_succeeds(client, db, mock_openai):
     assert r.status_code == 404
 
 
+@pytest.fixture
+def mock_openai_stream(monkeypatch):
+    """Stub OpenAI client that returns an async-iterable stream of deltas."""
+    captured: dict = {}
+
+    def _fake_factory():
+        client_obj = MagicMock()
+
+        async def _create(**kwargs):
+            captured["call"] = kwargs
+            assert kwargs.get("stream") is True
+
+            async def _aiter():
+                for piece in ["Hello", ", ", "world", "."]:
+                    yield SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(content=piece)
+                            )
+                        ]
+                    )
+
+            class _Stream:
+                def __aiter__(self):
+                    return _aiter()
+
+            return _Stream()
+
+        client_obj.chat.completions.create = _create
+        return client_obj
+
+    from api.routes import chat as chat_mod
+    monkeypatch.setattr(chat_mod, "_make_openai_client", _fake_factory)
+    return captured
+
+
+async def test_chat_stream_emits_sse_events_and_persists(
+    client, db, mock_openai_stream
+):
+    h = await _admin_headers(client)
+    async with client.stream(
+        "POST",
+        "/api/analytics/chat/stream",
+        headers=h,
+        json={"message": "hi", "period": "week"},
+    ) as r:
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/event-stream")
+        body = b""
+        async for chunk in r.aiter_bytes():
+            body += chunk
+    text = body.decode("utf-8")
+    assert "\"type\": \"meta\"" in text
+    assert "\"type\": \"delta\"" in text
+    assert "Hello" in text
+    assert "\"type\": \"done\"" in text
+
+    # The full message was persisted at end-of-stream.
+    convs = await client.get(
+        "/api/analytics/chat/conversations", headers=h
+    )
+    cid = convs.json()[0]["id"]
+    full = await client.get(
+        f"/api/analytics/chat/conversations/{cid}", headers=h
+    )
+    msgs = full.json()["messages"]
+    assert msgs[-1]["role"] == "assistant"
+    assert msgs[-1]["content"] == "Hello, world."
+
+
 async def test_delete_conversation_404_for_other_owner(client, db, mock_openai):
     h_admin = await _admin_headers(client)
     r = await client.post(

@@ -145,6 +145,75 @@ export const postChat = (body: ChatPostRequest) =>
     body: JSON.stringify(body),
   });
 
+/**
+ * Stream chat replies as SSE.
+ *
+ * The server emits `data: <json>` frames separated by blank lines:
+ *   - {type:"meta", conversation_id}
+ *   - {type:"delta", content}        (zero or more)
+ *   - {type:"done", message_id}
+ *   - {type:"error", detail}
+ *
+ * Calls handlers as events arrive. Returns when the stream closes.
+ */
+export async function postChatStream(
+  body: ChatPostRequest,
+  handlers: {
+    onMeta?: (conversationId: number) => void;
+    onDelta?: (content: string) => void;
+    onDone?: (messageId: number) => void;
+    onError?: (detail: string) => void;
+  }
+): Promise<void> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "text/event-stream",
+  };
+  const token = getAuthToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(`${BASE}/analytics/chat/stream`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    setAuthToken(null);
+    throw new Error("Unauthorized");
+  }
+  if (!res.ok || !res.body) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.detail || `HTTP ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE frames are separated by blank lines (\n\n).
+    let idx;
+    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const line = frame.split("\n").find((l) => l.startsWith("data: "));
+      if (!line) continue;
+      try {
+        const evt = JSON.parse(line.slice(6));
+        if (evt.type === "meta") handlers.onMeta?.(evt.conversation_id);
+        else if (evt.type === "delta") handlers.onDelta?.(evt.content);
+        else if (evt.type === "done") handlers.onDone?.(evt.message_id);
+        else if (evt.type === "error") handlers.onError?.(evt.detail);
+      } catch {
+        // skip malformed frames
+      }
+    }
+  }
+}
+
 export const listChatConversations = () =>
   request<ChatConversationSummary[]>("/analytics/chat/conversations");
 

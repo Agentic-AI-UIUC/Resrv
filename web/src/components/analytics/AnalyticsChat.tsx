@@ -4,7 +4,7 @@ import {
   deleteChatConversation,
   getChatConversation,
   listChatConversations,
-  postChat,
+  postChatStream,
 } from "../../api/client";
 import type {
   AnalyticsPeriod,
@@ -65,27 +65,66 @@ export function AnalyticsChat({ period }: Props) {
     setSending(true);
     setError(null);
 
-    const optimistic: ChatMessage = {
+    const optimisticUser: ChatMessage = {
       id: -Date.now(),
       conversation_id: active?.id ?? 0,
       role: "user",
       content: message,
       created_at: new Date().toISOString(),
     };
+    const streamingAssistant: ChatMessage = {
+      id: -(Date.now() + 1),
+      conversation_id: active?.id ?? 0,
+      role: "assistant",
+      content: "",
+      created_at: new Date().toISOString(),
+    };
     setActive((prev) =>
       prev
-        ? { ...prev, messages: [...prev.messages, optimistic] }
-        : { id: 0, title: message.slice(0, 60), messages: [optimistic] }
+        ? {
+            ...prev,
+            messages: [...prev.messages, optimisticUser, streamingAssistant],
+          }
+        : {
+            id: 0,
+            title: message.slice(0, 60),
+            messages: [optimisticUser, streamingAssistant],
+          }
     );
     setDraft("");
 
+    let conversationId = active?.id || 0;
     try {
-      const res = await postChat({
-        conversation_id: active?.id || undefined,
-        message,
-        period,
-      });
-      const thread = await getChatConversation(res.conversation_id);
+      await postChatStream(
+        {
+          conversation_id: active?.id || undefined,
+          message,
+          period,
+        },
+        {
+          onMeta: (cid) => {
+            conversationId = cid;
+          },
+          onDelta: (piece) => {
+            setActive((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    messages: prev.messages.map((m) =>
+                      m.id === streamingAssistant.id
+                        ? { ...m, content: m.content + piece }
+                        : m
+                    ),
+                  }
+                : prev
+            );
+          },
+          onError: (detail) => {
+            throw new Error(detail);
+          },
+        }
+      );
+      const thread = await getChatConversation(conversationId);
       setActive(thread);
       await refreshList();
     } catch (e) {
@@ -94,7 +133,10 @@ export function AnalyticsChat({ period }: Props) {
         prev
           ? {
               ...prev,
-              messages: prev.messages.filter((m) => m.id !== optimistic.id),
+              messages: prev.messages.filter(
+                (m) =>
+                  m.id !== optimisticUser.id && m.id !== streamingAssistant.id
+              ),
             }
           : null
       );
