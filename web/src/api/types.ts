@@ -130,6 +130,17 @@ export interface ChatPostRequest {
   period?: AnalyticsPeriod;
   start_date?: string;
   end_date?: string;
+  model?: string;
+}
+
+export interface ChatModelOption {
+  id: string;
+  label: string;
+}
+
+export interface ChatModelsResponse {
+  default: string;
+  models: ChatModelOption[];
 }
 
 export interface ChatPostResponse {

@@ -2,6 +2,7 @@ import type {
   AnalyticsResponse,
   ChatConversationDetail,
   ChatConversationSummary,
+  ChatModelsResponse,
   ChatPostRequest,
   ChatPostResponse,
   Machine,
@@ -224,3 +225,6 @@ export const deleteChatConversation = (id: number) =>
   request<{ status: string }>(`/analytics/chat/conversations/${id}`, {
     method: "DELETE",
   });
+
+export const listChatModels = () =>
+  request<ChatModelsResponse>("/analytics/chat/models");

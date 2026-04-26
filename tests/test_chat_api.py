@@ -160,6 +160,48 @@ async def test_post_chat_rejects_empty_message(client, db, mock_openai):
     assert r.status_code == 400
 
 
+async def test_get_models_returns_allowlist(client, db):
+    h = await _admin_headers(client)
+    r = await client.get("/api/analytics/chat/models", headers=h)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["default"] == "gpt-4o-mini"
+    ids = [m["id"] for m in body["models"]]
+    assert "gpt-4o-mini" in ids and "gpt-4o" in ids
+
+
+async def test_post_chat_uses_default_model_when_unspecified(
+    client, db, mock_openai
+):
+    h = await _admin_headers(client)
+    await client.post(
+        "/api/analytics/chat", headers=h, json={"message": "hi"}
+    )
+    assert mock_openai["call"]["model"] == "gpt-4o-mini"
+
+
+async def test_post_chat_passes_through_allowed_model(
+    client, db, mock_openai
+):
+    h = await _admin_headers(client)
+    await client.post(
+        "/api/analytics/chat",
+        headers=h,
+        json={"message": "hi", "model": "gpt-4o"},
+    )
+    assert mock_openai["call"]["model"] == "gpt-4o"
+
+
+async def test_post_chat_rejects_unknown_model(client, db, mock_openai):
+    h = await _admin_headers(client)
+    r = await client.post(
+        "/api/analytics/chat",
+        headers=h,
+        json={"message": "hi", "model": "gpt-evil"},
+    )
+    assert r.status_code == 400
+
+
 async def test_post_chat_503_when_openai_key_missing(client, db, monkeypatch):
     from api.routes import chat as chat_mod
     monkeypatch.setattr(chat_mod, "_make_openai_client", lambda: None)

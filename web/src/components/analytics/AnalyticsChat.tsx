@@ -4,6 +4,7 @@ import {
   deleteChatConversation,
   getChatConversation,
   listChatConversations,
+  listChatModels,
   postChatStream,
 } from "../../api/client";
 import type {
@@ -11,6 +12,7 @@ import type {
   ChatConversationDetail,
   ChatConversationSummary,
   ChatMessage,
+  ChatModelOption,
 } from "../../api/types";
 
 interface Props {
@@ -23,6 +25,8 @@ const SUGGESTIONS = [
   "Compare the two busiest days",
 ];
 
+const MODEL_STORAGE_KEY = "reserv.chat.model";
+
 export function AnalyticsChat({ period }: Props) {
   const [open, setOpen] = useState(false);
   const [convs, setConvs] = useState<ChatConversationSummary[]>([]);
@@ -31,6 +35,10 @@ export function AnalyticsChat({ period }: Props) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showList, setShowList] = useState(false);
+  const [models, setModels] = useState<ChatModelOption[]>([]);
+  const [model, setModel] = useState<string>(
+    () => localStorage.getItem(MODEL_STORAGE_KEY) ?? ""
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
 
   async function refreshList() {
@@ -44,6 +52,21 @@ export function AnalyticsChat({ period }: Props) {
   useEffect(() => {
     if (open) refreshList();
   }, [open]);
+
+  useEffect(() => {
+    if (!open || models.length > 0) return;
+    listChatModels()
+      .then((res) => {
+        setModels(res.models);
+        if (!model) setModel(res.default);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, [open, models.length, model]);
+
+  function pickModel(id: string) {
+    setModel(id);
+    localStorage.setItem(MODEL_STORAGE_KEY, id);
+  }
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -100,6 +123,7 @@ export function AnalyticsChat({ period }: Props) {
           conversation_id: active?.id || undefined,
           message,
           period,
+          model: model || undefined,
         },
         {
           onMeta: (cid) => {
@@ -173,7 +197,24 @@ export function AnalyticsChat({ period }: Props) {
               <div className="text-sm font-semibold text-gray-900">
                 Analytics chat
               </div>
-              <div className="text-xs text-gray-500">Scoped to: {period}</div>
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                <span>Scoped to: {period}</span>
+                <span>·</span>
+                <select
+                  value={model}
+                  onChange={(e) => pickModel(e.target.value)}
+                  disabled={sending || models.length === 0}
+                  className="rounded border border-gray-300 bg-white px-1 py-0.5 text-xs text-gray-700 disabled:bg-gray-100"
+                  title="Model"
+                >
+                  {models.length === 0 && <option>loading…</option>}
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div className="flex gap-2">
               <button

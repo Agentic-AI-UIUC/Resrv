@@ -25,6 +25,29 @@ router = APIRouter(
 CHAT_MODEL = "gpt-4o-mini"
 HISTORY_LIMIT = 8
 
+# Allowlist for the model dropdown. Add to this list as new OpenAI chat
+# models are validated. Anything outside this set is rejected with 400 so
+# users can't bill the org against arbitrary model names.
+ALLOWED_MODELS: list[dict[str, str]] = [
+    {"id": "gpt-4o-mini",   "label": "GPT-4o mini (fast, cheap)"},
+    {"id": "gpt-4o",        "label": "GPT-4o (balanced)"},
+    {"id": "gpt-4-turbo",   "label": "GPT-4 Turbo"},
+    {"id": "gpt-4.1-mini",  "label": "GPT-4.1 mini"},
+    {"id": "gpt-4.1",       "label": "GPT-4.1"},
+]
+_ALLOWED_MODEL_IDS = {m["id"] for m in ALLOWED_MODELS}
+
+
+def _resolve_model(requested: str | None) -> str:
+    if requested is None or requested == "":
+        return CHAT_MODEL
+    if requested not in _ALLOWED_MODEL_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"model must be one of: {sorted(_ALLOWED_MODEL_IDS)}",
+        )
+    return requested
+
 SYSTEM_PROMPT_TEMPLATE = """\
 You are an analytics assistant for the SCD makerspace queue system at the
 University of Illinois. Staff use this dashboard to monitor queue health.
@@ -87,6 +110,17 @@ class ChatRequest(BaseModel):
     period: str | None = None
     start_date: str | None = None
     end_date: str | None = None
+    model: str | None = None
+
+
+class ModelOption(BaseModel):
+    id: str
+    label: str
+
+
+class ModelsResponse(BaseModel):
+    default: str
+    models: list[ModelOption]
 
 
 class ChatResponse(BaseModel):
@@ -127,13 +161,14 @@ async def chat(
     if client is None:
         raise HTTPException(status_code=503, detail="Chat is not configured")
 
+    model = _resolve_model(body.model)
     conversation_id, openai_messages = await _build_chat_request(
         body, payload["sub"]
     )
 
     try:
         response = await client.chat.completions.create(
-            model=CHAT_MODEL,
+            model=model,
             messages=openai_messages,
             max_tokens=600,
             temperature=0.2,
@@ -222,6 +257,7 @@ async def chat_stream(
     if client is None:
         raise HTTPException(status_code=503, detail="Chat is not configured")
 
+    model = _resolve_model(body.model)
     conversation_id, openai_messages = await _build_chat_request(
         body, payload["sub"]
     )
@@ -235,7 +271,7 @@ async def chat_stream(
         full = []
         try:
             stream = await client.chat.completions.create(
-                model=CHAT_MODEL,
+                model=model,
                 messages=openai_messages,
                 max_tokens=600,
                 temperature=0.2,
@@ -266,6 +302,11 @@ async def chat_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/models", response_model=ModelsResponse)
+async def list_models() -> dict:
+    return {"default": CHAT_MODEL, "models": ALLOWED_MODELS}
 
 
 @router.get("/conversations", response_model=list[ConversationSummaryOut])
