@@ -189,7 +189,7 @@ export function AnalyticsChat({ period }: Props) {
 
       {open && (
         <div
-          className="fixed bottom-6 right-6 z-40 flex h-[560px] w-[380px] flex-col rounded-2xl border border-gray-200 bg-white shadow-2xl"
+          className="fixed bottom-6 right-6 z-40 flex h-[80vh] max-h-[820px] w-[min(560px,calc(100vw-3rem))] flex-col rounded-2xl border border-gray-200 bg-white shadow-2xl"
           onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
         >
           <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
@@ -197,24 +197,7 @@ export function AnalyticsChat({ period }: Props) {
               <div className="text-sm font-semibold text-gray-900">
                 Analytics chat
               </div>
-              <div className="flex items-center gap-2 text-xs text-gray-500">
-                <span>Scoped to: {period}</span>
-                <span>·</span>
-                <select
-                  value={model}
-                  onChange={(e) => pickModel(e.target.value)}
-                  disabled={sending || models.length === 0}
-                  className="rounded border border-gray-300 bg-white px-1 py-0.5 text-xs text-gray-700 disabled:bg-gray-100"
-                  title="Model"
-                >
-                  {models.length === 0 && <option>loading…</option>}
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <div className="text-xs text-gray-500">Scoped to: {period}</div>
             </div>
             <div className="flex gap-2">
               <button
@@ -329,7 +312,21 @@ export function AnalyticsChat({ period }: Props) {
           </div>
 
           <div className="border-t border-gray-100 p-2">
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
+              <select
+                value={model}
+                onChange={(e) => pickModel(e.target.value)}
+                disabled={sending || models.length === 0}
+                className="max-w-[40%] shrink rounded-lg border border-gray-300 bg-white px-2 py-2 text-xs text-gray-700 disabled:bg-gray-100"
+                title="Model"
+              >
+                {models.length === 0 && <option>loading…</option>}
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
               <input
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
