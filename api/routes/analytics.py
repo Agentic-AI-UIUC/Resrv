@@ -173,6 +173,21 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+async def compute_analytics_response(
+    period: str | None,
+    start_date: str | None,
+    end_date: str | None,
+    machine_id: int | None = None,
+) -> dict[str, Any]:
+    """Shared aggregation used by both the analytics routes and the chat router."""
+    p, sd, ed = _date_range(period, start_date, end_date)
+    rows = await models.get_analytics_snapshots(
+        start_date=sd, end_date=ed, machine_id=machine_id
+    )
+    agg = _aggregate(rows)
+    return {"period": p, "start_date": sd, "end_date": ed, **agg}
+
+
 @router.get("/today", response_model=TodayResponse)
 async def get_today_stats() -> dict:
     today = datetime.utcnow().date().isoformat()
@@ -204,12 +219,7 @@ async def get_machine_analytics(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> dict:
-    p, sd, ed = _date_range(period, start_date, end_date)
-    rows = await models.get_analytics_snapshots(
-        start_date=sd, end_date=ed, machine_id=machine_id
-    )
-    agg = _aggregate(rows)
-    return {"period": p, "start_date": sd, "end_date": ed, **agg}
+    return await compute_analytics_response(period, start_date, end_date, machine_id)
 
 
 @router.get("/", response_model=AnalyticsResponse)
@@ -218,7 +228,4 @@ async def get_analytics(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> dict:
-    p, sd, ed = _date_range(period, start_date, end_date)
-    rows = await models.get_analytics_snapshots(start_date=sd, end_date=ed)
-    agg = _aggregate(rows)
-    return {"period": p, "start_date": sd, "end_date": ed, **agg}
+    return await compute_analytics_response(period, start_date, end_date)
