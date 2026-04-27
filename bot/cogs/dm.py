@@ -264,7 +264,7 @@ class DMCog(commands.Cog):
 
         # Single entry -- execute and reply with the AI's conversational message
         entry = entries[0]
-        result = await self._do_action(action, entry)
+        result = await self._do_action(action, entry, dm_user=message.author)
         # Use AI reply as the primary message, append status info if different
         await message.reply(ai_reply)
         await self.bot.update_queue_embeds(entry["machine_id"])
@@ -273,8 +273,20 @@ class DMCog(commands.Cog):
     # Action handler
     # ------------------------------------------------------------------ #
 
-    async def _do_action(self, intent: str, entry: dict[str, Any]) -> str:
-        """Execute an intent on a specific queue entry and return a response string."""
+    async def _do_action(
+        self,
+        intent: str,
+        entry: dict[str, Any],
+        *,
+        dm_user: Any | None = None,
+    ) -> str:
+        """Execute an intent on a specific queue entry and return a response string.
+
+        ``dm_user`` is the Discord user object to DM the post-completion rating
+        prompt to (only used on the success branch of intent="done"). Pass
+        ``None`` to skip the rating DM (e.g. agent-driven or staff-completed
+        paths).
+        """
         machine_name = entry["machine_name"]
         status = entry["status"]
         entry_id = entry["id"]
@@ -282,6 +294,12 @@ class DMCog(commands.Cog):
         if intent == "done":
             if status == "serving":
                 await models.update_entry_status(entry_id, "completed", job_successful=1)
+                if dm_user is not None:
+                    await send_rating_dm(
+                        dm_user,
+                        queue_entry_id=entry_id,
+                        machine_name=machine_name,
+                    )
                 return f"Marked as done on **{machine_name}**. Thanks!"
             else:
                 # waiting -- remove from queue
@@ -394,7 +412,7 @@ class DMCog(commands.Cog):
             )
             return
 
-        result = await self._do_action(action, entry)
+        result = await self._do_action(action, entry, dm_user=interaction.user)
         await interaction.response.send_message(result, ephemeral=True)
         await self.bot.update_queue_embeds(entry["machine_id"])
 
@@ -438,9 +456,139 @@ class DMCog(commands.Cog):
 
         # Single entry -- execute directly
         entry = entries[0]
-        result = await self._do_action(action, entry)
+        result = await self._do_action(action, entry, dm_user=interaction.user)
         await interaction.response.send_message(result, ephemeral=True)
         await self.bot.update_queue_embeds(entry["machine_id"])
+
+
+# --------------------------------------------------------------------------- #
+# Post-completion rating flow
+# --------------------------------------------------------------------------- #
+
+
+async def send_rating_dm(user, *, queue_entry_id: int, machine_name: str) -> None:
+    """Send the post-completion rating prompt via DM. Swallows Forbidden."""
+    try:
+        await user.send(
+            content=f"How was your experience using **{machine_name}**?",
+            view=RatingView(
+                queue_entry_id=queue_entry_id,
+                machine_name=machine_name,
+            ),
+        )
+    except discord.Forbidden:
+        log.warning("cannot DM user %s — DMs disabled", user.id)
+
+
+class _RatingButton(discord.ui.Button):
+    def __init__(
+        self,
+        *,
+        rating: int | None,
+        label: str,
+        custom_id: str,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+        row: int = 0,
+    ):
+        super().__init__(label=label, custom_id=custom_id, style=style, row=row)
+        self._rating = rating  # None = Skip
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: "RatingView" = self.view  # type: ignore[assignment]
+        if self._rating is None:
+            for child in view.children:
+                if isinstance(child, discord.ui.Button):
+                    child.disabled = True
+            await interaction.response.edit_message(
+                content="Thanks anyway!", view=view,
+            )
+            return
+        await interaction.response.send_modal(
+            FeedbackModal(
+                queue_entry_id=view._queue_entry_id,
+                rating=self._rating,
+                machine_name=view._machine_name,
+            )
+        )
+
+
+class RatingView(discord.ui.View):
+    """Ephemeral 1–5 star rating prompt sent after a successful completion.
+
+    ``timeout=600`` and never re-registered with ``bot.add_view`` — once the
+    DM is dismissed or times out the view dies with it.
+    """
+
+    def __init__(self, *, queue_entry_id: int, machine_name: str) -> None:
+        super().__init__(timeout=600)
+        self._queue_entry_id = queue_entry_id
+        self._machine_name = machine_name
+        for n in range(1, 6):
+            self.add_item(
+                _RatingButton(
+                    rating=n,
+                    label=f"{n}\u2605",
+                    custom_id=f"rate:{queue_entry_id}:{n}",
+                    row=0,
+                )
+            )
+        self.add_item(
+            _RatingButton(
+                rating=None,
+                label="Skip",
+                custom_id=f"rate:{queue_entry_id}:skip",
+                row=1,
+            )
+        )
+
+
+class FeedbackModal(discord.ui.Modal, title="Tell us more (optional)"):
+    comment = discord.ui.TextInput(
+        label="Your feedback",
+        style=discord.TextStyle.paragraph,
+        placeholder="What worked? What didn't? (optional)",
+        required=False,
+        max_length=500,
+    )
+
+    def __init__(
+        self,
+        *,
+        queue_entry_id: int,
+        rating: int,
+        machine_name: str,
+    ) -> None:
+        super().__init__()
+        self._queue_entry_id = queue_entry_id
+        self._rating = rating
+        self._machine_name = machine_name
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        comment_val = (self.comment.value or "").strip() or None
+        try:
+            await models.create_feedback(
+                queue_entry_id=self._queue_entry_id,
+                rating=self._rating,
+                comment=comment_val,
+            )
+        except models.FeedbackAlreadyExistsError:
+            await interaction.response.send_message(
+                "You've already submitted feedback for this visit.",
+                ephemeral=True,
+            )
+            return
+        except Exception:
+            log.exception(
+                "feedback submit failed for entry %s", self._queue_entry_id
+            )
+            await interaction.response.send_message(
+                "Visit no longer found — feedback discarded.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            f"Thanks for the {self._rating}\u2605 rating!", ephemeral=True,
+        )
 
 
 # --------------------------------------------------------------------------- #
