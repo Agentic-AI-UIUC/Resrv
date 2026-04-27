@@ -72,12 +72,6 @@ class ProfileModal(discord.ui.Modal, title="SCD Queue — Edit Profile"):
         min_length=2,
         max_length=100,
     )
-    college = discord.ui.TextInput(
-        label="College",
-        placeholder="e.g. Grainger Engineering",
-        min_length=2,
-        max_length=100,
-    )
     graduation_year = discord.ui.TextInput(
         label="Expected Graduation Year",
         placeholder="e.g. 2027",
@@ -85,9 +79,10 @@ class ProfileModal(discord.ui.Modal, title="SCD Queue — Edit Profile"):
         max_length=4,
     )
 
-    def __init__(self, user_id: int) -> None:
+    def __init__(self, user_id: int, college_id: int | None) -> None:
         super().__init__()
         self._user_id = user_id
+        self._college_id = college_id
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         email_val = self.email.value.strip()
@@ -104,12 +99,12 @@ class ProfileModal(discord.ui.Modal, title="SCD Queue — Edit Profile"):
             )
             return
 
-        await models.register_user(
+        await models.update_user_profile(
             user_id=self._user_id,
             full_name=self.full_name.value.strip(),
             email=email_val,
             major=self.major.value.strip(),
-            college=self.college.value.strip(),
+            college_id=self._college_id,
             graduation_year=year_val,
         )
         await interaction.response.send_message(
@@ -351,15 +346,13 @@ class AdminCog(commands.Cog):
                 str(interaction.user.id), interaction.user.display_name
             )
 
-        modal = ProfileModal(user["id"])
+        modal = ProfileModal(user["id"], user.get("college_id"))
         if user.get("full_name"):
             modal.full_name.default = user["full_name"]
         if user.get("email"):
             modal.email.default = user["email"]
         if user.get("major"):
             modal.major.default = user["major"]
-        if user.get("college"):
-            modal.college.default = user["college"]
         if user.get("graduation_year"):
             modal.graduation_year.default = user["graduation_year"]
 
