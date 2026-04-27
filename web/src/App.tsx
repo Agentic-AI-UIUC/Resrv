@@ -9,6 +9,7 @@ import { AdminMachines } from "./pages/admin/Machines";
 import { AdminStaff } from "./pages/admin/Staff";
 import { AdminSettings } from "./pages/admin/Settings";
 import { AdminColleges } from "./pages/admin/Colleges";
+import { AdminFeedback } from "./pages/admin/Feedback";
 
 function RequireStaff({ children }: { children: React.ReactElement }) {
   const { username, loading } = useAuth();
@@ -85,6 +86,14 @@ export default function App() {
                     <RequireAdmin>
                       <AdminColleges />
                     </RequireAdmin>
+                  </RequireStaff>
+                }
+              />
+              <Route
+                path="/admin/feedback"
+                element={
+                  <RequireStaff>
+                    <AdminFeedback />
                   </RequireStaff>
                 }
               />

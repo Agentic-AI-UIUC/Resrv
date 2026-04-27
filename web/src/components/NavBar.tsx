@@ -97,6 +97,12 @@ export function NavBar() {
                 Colleges
               </Link>
             )}
+            <Link
+              to="/admin/feedback"
+              className={linkClass("/admin/feedback")}
+            >
+              Feedback
+            </Link>
             {isAdmin && (
               <Link
                 to="/admin/settings"
