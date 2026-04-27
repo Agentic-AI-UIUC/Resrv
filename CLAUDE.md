@@ -68,6 +68,12 @@ Update `memory.md` whenever something significant changes. Read it at the start 
 - `queue_entries.position` is a join-time stamp and was leaking into the public web card as a stale `#3` after earlier entries finished. Discord embed already renumbered.
 - Fixed by computing display rank in `MachineColumn` (filter waiting + index) and passing `displayPosition` to `QueueCard`. Serving entries now render "serving" instead of a number. No DB writes per mutation.
 
+### 2026-04-26 — College Signup (UIUC picker) + Analytics-by-College
+- Replaced freeform `college` text field with admin-managed `colleges` table + FK on users. 15 standard UIUC colleges seeded; admin can add/rename/archive/purge via new `/admin/colleges` page (admin-only, mirrors machines page).
+- Discord signup is now a two-step flow: ephemeral `StringSelect` view (`CollegeSelectView`, `timeout=120`) → 4-input `SignupModal` with college_id baked in. Existing registered users have `registered` flipped to 0 in `_migrate` so they re-pick on next Join Queue (modal prefilled with their prior name/email/major/grad year).
+- Analytics dashboard + chatbot now group/filter by college. `compute_analytics_response` accepts `college_id`; the response always contains a `colleges` block with an "Unspecified" bucket for users with `college_id IS NULL`. Frontend gets a college filter dropdown, active filter chip, and a "By College" bar chart card.
+- Conventions: `confirm_name` retype required for purge (mirrors `confirm_slug`); soft-delete via `archived_at` + partial unique index `idx_colleges_name_active`; `DuplicateCollegeError` (409) + `CollegeInUseError` (409) raised by helpers; admin /profile modal drops the college field (users re-pick via Join Queue).
+
 ### 2026-04-22 — Multi-Unit Machines
 - New `machine_units` table; every existing machine backfilled with one "Main" unit. `queue_entries.unit_id` stamped on promotion.
 - Agent now promotes up to `count_active_units(machine)` in parallel; auto-assigns the first active unit without a live serving entry. Maintenance units exclude themselves from capacity.

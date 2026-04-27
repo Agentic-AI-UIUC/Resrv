@@ -1,5 +1,37 @@
 # Short-term Memory
 
+## 2026-04-26 — College Signup + Analytics-by-College
+Shipped on `feat/customizable-admin`. 200 tests passing, tsc clean.
+
+**Backend:**
+- New `colleges` table (id, name, archived_at) + partial unique index `idx_colleges_name_active` on `(name) WHERE archived_at IS NULL` (created in `_migrate` post-CREATE TABLE per learnings.md 2026-04-22).
+- `users.college_id INTEGER REFERENCES colleges(id)` replaces freeform `users.college` (DROPped via SQLite ≥3.35 ALTER).
+- `_seed_colleges` idempotently inserts the 15 standard UIUC colleges; called from `init_db` after `_seed_machines`.
+- Re-signup migration: `UPDATE users SET registered=0 WHERE registered=1` runs once in `_migrate` so existing users re-pick a college on next Join Queue press. `full_name`/`email`/`major`/`graduation_year` preserved for prefill.
+- `db/models.py`: create/list_active/list_all/get/update/archive/restore/purge_college, count_users_in_college; `DuplicateCollegeError` + `CollegeInUseError`.
+- `api/routes/colleges.py`: public GET active, staff GET include_archived (single handler with conditional bearer check), admin POST/PATCH/DELETE/restore/purge with `confirm_name` body.
+- `compute_analytics_response` accepts `college_id` filter and always returns a `colleges: list[CollegeStat]` block ("Unspecified" bucket aggregates `college_id IS NULL`). When `college_id` is set, summary/machines/daily_breakdown are computed live (snapshots have no per-user dim).
+- `bot/cogs/admin.py` `/profile` modal updated: dropped freeform `college` TextInput, switched to `update_user_profile(college_id=...)` preserving the user's existing `college_id`.
+
+**Discord:**
+- New `CollegeSelectView` (ephemeral, `timeout=120`) shown before the modal. `_CollegeSelect` subclass with writable `values` for tests. Builds options from `list_active_colleges()`, capped at 25.
+- `SignupModal` drops the `college` `TextInput`; takes `college_id` + `prefill` kwargs. Prefill populates `TextInput.default` for re-signup.
+- `_handle_join` registration branch sends the select view ephemerally; empty colleges list → "Sign-ups temporarily unavailable" message.
+
+**Frontend:**
+- `/admin/colleges` page (admin-only) mirrors `/admin/machines`: add form, inline-rename table, archive/restore, red purge button with name-retype modal.
+- Analytics dashboard: college dropdown filter (from `listColleges()`), violet active filter chip, new `CollegeUtilization` bar-chart card paired with PeakHours.
+- `useAnalytics` hook bypasses the today-stats merge when a college filter is active (the `/today` endpoint has no college dim — acceptable trade-off).
+- `web/src/api/types.ts` exports `CollegeSummary`, `AdminCollege`, `CollegeStat`. `web/src/api/admin.ts` has `listAllColleges`/`createCollege`/`patchCollege`/`archiveCollege`/`restoreCollege`/`purgeCollege`. `web/src/api/client.ts` exports public `listColleges`.
+
+**Auth & scope:** All college mutations require admin (`Depends(require_admin)`); GET `?include_archived=true` requires staff. Public GET strips `archived_at` from the response.
+
+**Docs:**
+- Design: `docs/plans/2026-04-26-college-signup-design.md`.
+- Plan: `docs/plans/2026-04-26-college-signup.md`.
+
+**Commits:** Task 1 `987b9f5`, Task 2 `ba976be`, Task 3 `5955c2c`, Task 4 `f844591`, admin /profile fix `72bd82a`, Task 5 `67e9601`, Task 6 `a8525bc`, Task 7 `ec063bf`, Task 8 `e26e1af`, Task 9 `6a34aa3`.
+
 ## 2026-04-26 — Analytics Chatbot
 Shipped on `feat/customizable-admin`. 162 tests passing, tsc clean.
 
