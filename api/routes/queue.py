@@ -16,6 +16,7 @@ from db.models import (
     get_user_active_entry,
     join_queue as db_join_queue,
     leave_queue as db_leave_queue,
+    list_units,
     update_entry_status,
     bump_entry_to_top,
 )
@@ -37,8 +38,15 @@ class QueueEntryOut(BaseModel):
     reminded: int
     job_successful: int | None = None
     failure_notes: str | None = None
+    unit_id: int | None = None
     discord_id: str | None = None
     discord_name: str | None = None
+
+
+class UnitSummary(BaseModel):
+    id: int
+    label: str
+    status: str
 
 
 class MachineQueueOut(BaseModel):
@@ -47,6 +55,7 @@ class MachineQueueOut(BaseModel):
     machine_slug: str
     machine_status: str
     entries: list[QueueEntryOut]
+    units: list[UnitSummary] = []
 
 
 class JoinRequest(BaseModel):
@@ -90,6 +99,7 @@ async def list_all_queues() -> list[dict]:
     result: list[dict] = []
     for m in machines:
         entries = await get_queue_for_machine(m["id"])
+        units = await list_units(m["id"])
         result.append(
             {
                 "machine_id": m["id"],
@@ -97,6 +107,10 @@ async def list_all_queues() -> list[dict]:
                 "machine_slug": m["slug"],
                 "machine_status": m["status"],
                 "entries": entries,
+                "units": [
+                    {"id": u["id"], "label": u["label"], "status": u["status"]}
+                    for u in units
+                ],
             }
         )
     return result

@@ -10,6 +10,7 @@ from discord.ext import tasks
 
 from config import settings
 from datetime import datetime, timedelta
+from api.settings_store import get_setting_int
 from db import models
 
 if TYPE_CHECKING:
@@ -79,36 +80,50 @@ async def _before_agent_tick() -> None:
 # --------------------------------------------------------------------------- #
 
 async def _process_machines() -> None:
-    """For each active machine, advance the queue if no one is being served."""
+    """For each active machine, promote waiting users until capacity is full."""
     machines = await models.get_machines()
     for machine in machines:
         if machine["status"] != "active":
             continue
 
-        serving = await models.get_serving_entry(machine["id"])
-        if serving is not None:
-            continue  # someone is already being served
+        capacity = await models.count_active_units(machine["id"])
+        if capacity == 0:
+            continue
 
-        next_entry = await models.get_next_waiting(machine["id"])
-        if next_entry is None:
-            continue  # queue is empty
+        serving = await models.count_serving_on_machine(machine["id"])
+        promoted_any = False
+        while serving < capacity:
+            next_entry = await models.get_next_waiting(machine["id"])
+            if next_entry is None:
+                break
+            unit = await models.first_available_unit(machine["id"])
+            if unit is None:
+                break
 
-        await models.update_entry_status(next_entry["id"], "serving")
-        log.info(
-            "Advanced queue: %s now serving on %s",
-            next_entry["discord_name"],
-            machine["name"],
-        )
+            await models.update_entry_status(
+                next_entry["id"], "serving", unit_id=unit["id"]
+            )
+            log.info(
+                "Advanced queue: %s on %s / %s",
+                next_entry["discord_name"], machine["name"], unit["label"],
+            )
 
-        # DM the user
-        await _dm_user(
-            next_entry["discord_id"],
-            f"You're up! Head to the **{machine['name']}** now. "
-            f"You'll receive a reminder after {settings.reminder_minutes} minutes.",
-        )
+            unit_suffix = (
+                "" if unit["label"] == "Main"
+                else f" (use the **{unit['label']}**)"
+            )
+            reminder_minutes = await get_setting_int(
+                "reminder_minutes", settings.reminder_minutes
+            )
+            await _dm_user(
+                next_entry["discord_id"],
+                f"You're up! Head to the **{machine['name']}**{unit_suffix} now. "
+                f"You'll receive a reminder after {reminder_minutes} minutes.",
+            )
+            serving += 1
+            promoted_any = True
 
-        # Update pinned embed
-        if _bot is not None:
+        if promoted_any and _bot is not None:
             await _bot.update_queue_embeds(machine["id"])
 
 
@@ -118,14 +133,20 @@ async def _process_machines() -> None:
 
 async def _send_reminders() -> None:
     """DM users who have been serving longer than ``reminder_minutes``."""
-    entries = await models.get_entries_needing_reminder(settings.reminder_minutes)
+    reminder_minutes = await get_setting_int(
+        "reminder_minutes", settings.reminder_minutes
+    )
+    grace_minutes = await get_setting_int(
+        "grace_minutes", settings.grace_minutes
+    )
+    entries = await models.get_entries_needing_reminder(reminder_minutes)
     for entry in entries:
         await models.mark_reminded(entry["id"])
         await _dm_user(
             entry["discord_id"],
-            f"You've been using the machine for {settings.reminder_minutes} "
+            f"You've been using the machine for {reminder_minutes} "
             f"minutes. Still working? If you don't respond within "
-            f"{settings.grace_minutes} minutes you'll be marked as finished.",
+            f"{grace_minutes} minutes you'll be marked as finished.",
         )
         log.info(
             "Sent reminder to %s (entry %d)", entry["discord_name"], entry["id"]
@@ -138,9 +159,13 @@ async def _send_reminders() -> None:
 
 async def _expire_grace_period() -> None:
     """Auto-complete entries that were reminded but didn't respond in time."""
-    entries = await models.get_entries_past_grace(
-        settings.reminder_minutes, settings.grace_minutes
+    reminder_minutes = await get_setting_int(
+        "reminder_minutes", settings.reminder_minutes
     )
+    grace_minutes = await get_setting_int(
+        "grace_minutes", settings.grace_minutes
+    )
+    entries = await models.get_entries_past_grace(reminder_minutes, grace_minutes)
     for entry in entries:
         await models.update_entry_status(entry["id"], "no_show")
         await _dm_user(
@@ -207,21 +232,24 @@ async def _compute_daily_analytics() -> None:
             """
             SELECT
                 COUNT(*) as total_jobs,
-                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_jobs,
-                SUM(CASE WHEN status = 'no_show' THEN 1 ELSE 0 END) as no_show_count,
-                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_count,
-                SUM(CASE WHEN job_successful = 0 THEN 1 ELSE 0 END) as failure_count,
-                COUNT(DISTINCT user_id) as unique_users,
+                SUM(CASE WHEN qe.status = 'completed' THEN 1 ELSE 0 END) as completed_jobs,
+                SUM(CASE WHEN qe.status = 'no_show' THEN 1 ELSE 0 END) as no_show_count,
+                SUM(CASE WHEN qe.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_count,
+                SUM(CASE WHEN qe.job_successful = 0 THEN 1 ELSE 0 END) as failure_count,
+                COUNT(DISTINCT qe.user_id) as unique_users,
                 AVG(CASE
-                    WHEN serving_at IS NOT NULL
-                    THEN (julianday(serving_at) - julianday(joined_at)) * 24 * 60
+                    WHEN qe.serving_at IS NOT NULL
+                    THEN (julianday(qe.serving_at) - julianday(qe.joined_at)) * 24 * 60
                 END) as avg_wait_mins,
                 AVG(CASE
-                    WHEN completed_at IS NOT NULL AND serving_at IS NOT NULL
-                    THEN (julianday(completed_at) - julianday(serving_at)) * 24 * 60
-                END) as avg_serve_mins
-            FROM queue_entries
-            WHERE machine_id = ? AND date(joined_at) = ?
+                    WHEN qe.completed_at IS NOT NULL AND qe.serving_at IS NOT NULL
+                    THEN (julianday(qe.completed_at) - julianday(qe.serving_at)) * 24 * 60
+                END) as avg_serve_mins,
+                AVG(f.rating)   as avg_rating,
+                COUNT(f.rating) as rating_count
+            FROM queue_entries qe
+            LEFT JOIN feedback f ON f.queue_entry_id = qe.id
+            WHERE qe.machine_id = ? AND date(qe.joined_at) = ?
             """,
             (mid, yesterday),
         )
@@ -258,6 +286,8 @@ async def _compute_daily_analytics() -> None:
             cancelled_count=row["cancelled_count"],
             unique_users=row["unique_users"],
             failure_count=row["failure_count"],
+            avg_rating=row["avg_rating"],
+            rating_count=row["rating_count"] or 0,
         )
 
     log.info("Analytics snapshots computed for %s", yesterday)

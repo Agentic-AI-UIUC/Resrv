@@ -267,12 +267,18 @@ async def test_register_user(db):
     user = await models.get_or_create_user("reg1", "RegUser")
     assert user.get("registered", 0) == 0
 
+    cursor = await db.execute(
+        "SELECT id FROM colleges WHERE name = ? AND archived_at IS NULL",
+        ("Grainger College of Engineering",),
+    )
+    college_id = (await cursor.fetchone())["id"]
+
     await models.register_user(
         user_id=user["id"],
         full_name="Alex Chen",
         email="achen2@illinois.edu",
         major="Computer Science",
-        college="Grainger Engineering",
+        college_id=college_id,
         graduation_year="2027",
     )
     updated = await models.get_user_by_discord_id("reg1")
@@ -280,19 +286,30 @@ async def test_register_user(db):
     assert updated["full_name"] == "Alex Chen"
     assert updated["email"] == "achen2@illinois.edu"
     assert updated["major"] == "Computer Science"
-    assert updated["college"] == "Grainger Engineering"
+    assert updated["college_id"] == college_id
     assert updated["graduation_year"] == "2027"
 
 
 async def test_update_user_profile(db):
     """update_user_profile changes existing fields."""
     user = await models.get_or_create_user("upd1", "UpdUser")
+    cursor = await db.execute(
+        "SELECT id FROM colleges WHERE name = ? AND archived_at IS NULL",
+        ("College of Liberal Arts and Sciences",),
+    )
+    las_id = (await cursor.fetchone())["id"]
+    cursor = await db.execute(
+        "SELECT id FROM colleges WHERE name = ? AND archived_at IS NULL",
+        ("Grainger College of Engineering",),
+    )
+    grainger_id = (await cursor.fetchone())["id"]
+
     await models.register_user(
         user_id=user["id"],
         full_name="Old Name",
         email="old@illinois.edu",
         major="Math",
-        college="LAS",
+        college_id=las_id,
         graduation_year="2026",
     )
     await models.update_user_profile(
@@ -300,14 +317,14 @@ async def test_update_user_profile(db):
         full_name="New Name",
         email="new@illinois.edu",
         major="Physics",
-        college="Grainger Engineering",
+        college_id=grainger_id,
         graduation_year="2028",
     )
     updated = await models.get_user_by_discord_id("upd1")
     assert updated["full_name"] == "New Name"
     assert updated["email"] == "new@illinois.edu"
     assert updated["major"] == "Physics"
-    assert updated["college"] == "Grainger Engineering"
+    assert updated["college_id"] == grainger_id
     assert updated["graduation_year"] == "2028"
     assert updated["registered"] == 1
 
@@ -394,4 +411,198 @@ async def test_compute_live_today_stats(db):
     assert machine_stat["total_jobs"] >= 1
     assert machine_stat["completed_jobs"] >= 1
 
+
+# ── Machine archival schema ─────────────────────────────────────────────
+
+
+async def test_machines_have_archived_at_column(db):
+    cursor = await db.execute("PRAGMA table_info(machines)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    assert "archived_at" in columns
+
+
+async def test_fresh_machines_are_not_archived(db):
+    row = await (await db.execute(
+        "SELECT archived_at FROM machines LIMIT 1"
+    )).fetchone()
+    assert row["archived_at"] is None
+
+
+# ── Staff role schema ───────────────────────────────────────────────────
+
+
+async def test_staff_users_have_role_column(db):
+    cursor = await db.execute("PRAGMA table_info(staff_users)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    assert "role" in columns
+
+
+async def test_settings_table_exists_and_seeded(db):
+    cursor = await db.execute("SELECT key, value FROM settings ORDER BY key")
+    rows = {r["key"]: r["value"] for r in await cursor.fetchall()}
+    for k in (
+        "reminder_minutes",
+        "grace_minutes",
+        "queue_reset_hour",
+        "agent_tick_seconds",
+        "public_mode",
+        "maintenance_banner",
+    ):
+        assert k in rows, f"missing setting: {k}"
+    assert rows["public_mode"] == "false"
+    assert rows["maintenance_banner"] == ""
+
+
+async def test_migration_promotes_oldest_staff_when_no_admin_exists(db):
+    from api.auth import hash_password
+    await db.execute("DELETE FROM staff_users")
+    await db.execute(
+        "INSERT INTO staff_users (username, password_hash, role) VALUES (?, ?, ?)",
+        ("first", hash_password("pw"), "staff"),
+    )
+    await db.execute(
+        "INSERT INTO staff_users (username, password_hash, role) VALUES (?, ?, ?)",
+        ("second", hash_password("pw"), "staff"),
+    )
+    await db.commit()
+    import db.database as dbm
+    await dbm._migrate(db)
+    row = await (await db.execute(
+        "SELECT role FROM staff_users WHERE username = 'first'"
+    )).fetchone()
+    assert row["role"] == "admin"
+    row = await (await db.execute(
+        "SELECT role FROM staff_users WHERE username = 'second'"
+    )).fetchone()
+    assert row["role"] == "staff"
+
+
+# ── Colleges table schema ───────────────────────────────────────────────
+
+
+async def test_colleges_table_seeded_on_fresh_db(db):
+    cursor = await db.execute(
+        "SELECT name FROM colleges WHERE archived_at IS NULL ORDER BY id"
+    )
+    rows = [row["name"] for row in await cursor.fetchall()]
+    assert "Grainger College of Engineering" in rows
+    assert "Gies College of Business" in rows
+    assert len(rows) >= 15
+
+
+async def test_users_college_id_column_exists(db):
+    cursor = await db.execute("PRAGMA table_info(users)")
+    cols = {row[1] for row in await cursor.fetchall()}
+    assert "college_id" in cols
+    assert "college" not in cols  # legacy column dropped
+
+
+async def test_partial_unique_index_blocks_duplicate_active_name(db):
+    await db.execute("INSERT INTO colleges (name) VALUES (?)", ("Test College",))
+    with pytest.raises(Exception):
+        await db.execute("INSERT INTO colleges (name) VALUES (?)", ("Test College",))
+
+
+async def test_partial_unique_index_allows_archived_duplicate(db):
+    await db.execute(
+        "INSERT INTO colleges (name, archived_at) VALUES (?, datetime('now'))",
+        ("Archived College",),
+    )
+    # active insert with same name must succeed
+    await db.execute("INSERT INTO colleges (name) VALUES (?)", ("Archived College",))
+
+
+async def test_migration_wipes_registered_flag_for_existing_users(db):
+    """Upgrade path: existing registered users should be flipped to registered=0
+    so they re-pick a college on next Join Queue press."""
+    # Simulate a pre-migration registered user. The db fixture has already run
+    # init_db, so we manually re-flip then re-run _migrate to confirm
+    # idempotence + wipe.
+    await db.execute(
+        "INSERT INTO users (discord_id, discord_name, full_name, email, major, "
+        "graduation_year, registered) VALUES (?, ?, ?, ?, ?, ?, 1)",
+        ("999", "legacy", "Legacy User", "legacy@illinois.edu", "CS", "2027"),
+    )
+    await db.commit()
+    from db import database
+    await database._migrate(db)
+    cursor = await db.execute(
+        "SELECT registered FROM users WHERE discord_id = '999'"
+    )
+    row = await cursor.fetchone()
+    assert row["registered"] == 0
+
+
+# ── Feedback schema ─────────────────────────────────────────────────────
+
+
+async def test_feedback_table_exists_with_check_constraint(db):
+    conn = await models.get_db()
+    cursor = await conn.execute("PRAGMA table_info(feedback)")
+    cols = {row[1] for row in await cursor.fetchall()}
+    assert {"id", "queue_entry_id", "rating", "comment", "created_at"} <= cols
+
+
+async def test_feedback_unique_per_queue_entry(db):
+    conn = await models.get_db()
+    user = await models.get_or_create_user(discord_id="ftest1", discord_name="u")
+    machines = await models.get_machines()
+    entry = await models.join_queue(user["id"], machines[0]["id"])
+    await models.update_entry_status(entry["id"], "serving")
+    await models.update_entry_status(entry["id"], "completed", job_successful=1)
+    await conn.execute(
+        "INSERT INTO feedback (queue_entry_id, rating) VALUES (?, ?)",
+        (entry["id"], 5),
+    )
+    await conn.commit()
+    with pytest.raises(Exception):
+        await conn.execute(
+            "INSERT INTO feedback (queue_entry_id, rating) VALUES (?, ?)",
+            (entry["id"], 3),
+        )
+
+
+async def test_feedback_check_blocks_invalid_rating(db):
+    conn = await models.get_db()
+    user = await models.get_or_create_user(discord_id="ftest2", discord_name="u")
+    machines = await models.get_machines()
+    entry = await models.join_queue(user["id"], machines[0]["id"])
+    with pytest.raises(Exception):
+        await conn.execute(
+            "INSERT INTO feedback (queue_entry_id, rating) VALUES (?, ?)",
+            (entry["id"], 0),
+        )
+    with pytest.raises(Exception):
+        await conn.execute(
+            "INSERT INTO feedback (queue_entry_id, rating) VALUES (?, ?)",
+            (entry["id"], 6),
+        )
+
+
+async def test_feedback_cascades_on_queue_entry_delete(db):
+    conn = await models.get_db()
+    user = await models.get_or_create_user(discord_id="ftest3", discord_name="u")
+    machines = await models.get_machines()
+    entry = await models.join_queue(user["id"], machines[0]["id"])
+    await conn.execute(
+        "INSERT INTO feedback (queue_entry_id, rating, comment) VALUES (?, ?, ?)",
+        (entry["id"], 4, "ok"),
+    )
+    await conn.commit()
+    await conn.execute("DELETE FROM queue_entries WHERE id = ?", (entry["id"],))
+    await conn.commit()
+    cursor = await conn.execute(
+        "SELECT COUNT(*) AS cnt FROM feedback WHERE queue_entry_id = ?",
+        (entry["id"],),
+    )
+    row = await cursor.fetchone()
+    assert row["cnt"] == 0
+
+
+async def test_analytics_snapshots_has_rating_columns(db):
+    conn = await models.get_db()
+    cursor = await conn.execute("PRAGMA table_info(analytics_snapshots)")
+    cols = {row[1] for row in await cursor.fetchall()}
+    assert "avg_rating" in cols
+    assert "rating_count" in cols
 

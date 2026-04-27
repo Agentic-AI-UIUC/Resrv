@@ -24,6 +24,17 @@ export function MachineColumn({ queue, onRefresh }: Props) {
   const serving = queue.entries.filter((e) => e.status === "serving");
   const waiting = queue.entries.filter((e) => e.status === "waiting");
 
+  const servingByUnit = new Map<number, string>();
+  for (const e of serving) {
+    if (e.unit_id != null && e.discord_name) {
+      servingByUnit.set(e.unit_id, e.discord_name);
+    }
+  }
+  const showUnitStrip =
+    queue.units &&
+    queue.units.length > 0 &&
+    !(queue.units.length === 1 && queue.units[0].label === "Main");
+
   async function act(fn: () => Promise<unknown>) {
     try {
       await fn();
@@ -56,6 +67,38 @@ export function MachineColumn({ queue, onRefresh }: Props) {
         </div>
       </div>
 
+      {/* Units chip strip */}
+      {showUnitStrip && (
+        <div className="flex flex-wrap gap-1 px-3 pt-2">
+          {queue.units.map((u) => {
+            const servingName = servingByUnit.get(u.id);
+            const cls =
+              u.status === "maintenance"
+                ? "bg-gray-200 text-gray-600"
+                : servingName
+                  ? "bg-sky-100 text-sky-800"
+                  : "bg-emerald-100 text-emerald-800";
+            return (
+              <span
+                key={u.id}
+                className={`rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}
+                title={
+                  u.status === "maintenance"
+                    ? "maintenance"
+                    : servingName
+                      ? `in use by ${servingName}`
+                      : "available"
+                }
+              >
+                {u.label}
+                {servingName ? ` — ${servingName}` : ""}
+                {u.status === "maintenance" ? " — maint" : ""}
+              </span>
+            );
+          })}
+        </div>
+      )}
+
       {/* Pause / Resume */}
       <div className="px-3 pt-2">
         <button
@@ -85,10 +128,11 @@ export function MachineColumn({ queue, onRefresh }: Props) {
           <div className="border-t border-dashed border-gray-300 my-1" />
         )}
 
-        {waiting.map((entry) => (
+        {waiting.map((entry, i) => (
           <QueueCard
             key={entry.id}
             entry={entry}
+            displayPosition={i + 1}
             onServe={() => act(() => serveEntry(entry.id))}
             onBump={() => act(() => bumpEntry(entry.id))}
             onRemove={() => act(() => leaveEntry(entry.id))}

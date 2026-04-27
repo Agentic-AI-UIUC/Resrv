@@ -33,3 +33,25 @@ def notify_embed_update(machine_id: int) -> None:
         )
     except Exception:
         log.warning("Failed to schedule embed update for machine %d", machine_id)
+
+
+def notify_embed_create(machine_id: int) -> None:
+    if bot is None or bot.loop is None:
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(
+            bot.create_queue_embed(machine_id), bot.loop
+        )
+    except Exception:
+        log.warning("Failed to schedule embed create for machine %d", machine_id)
+
+
+def notify_embed_delete(machine_id: int, message_id: str | None) -> None:
+    if bot is None or bot.loop is None or not message_id:
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(
+            bot.delete_queue_embed(int(message_id)), bot.loop
+        )
+    except Exception:
+        log.warning("Failed to schedule embed delete for machine %d", machine_id)

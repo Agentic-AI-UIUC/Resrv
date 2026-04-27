@@ -15,6 +15,10 @@ async def init_db() -> aiosqlite.Connection:
     await _create_tables(_db)
     await _migrate(_db)
     await _seed_machines(_db)
+    await _seed_colleges(_db)
+    await _seed_staff(_db)
+    await _seed_settings(_db)
+    await _backfill_main_units(_db)
     await _db.commit()
     return _db
 
@@ -39,10 +43,26 @@ async def _create_tables(db: aiosqlite.Connection) -> None:
         CREATE TABLE IF NOT EXISTS machines (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             name             TEXT    NOT NULL,
-            slug             TEXT    UNIQUE NOT NULL,
+            slug             TEXT    NOT NULL,
             status           TEXT    NOT NULL DEFAULT 'active',
             embed_message_id TEXT,
-            created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+            created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+            archived_at      TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS machine_units (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_id   INTEGER NOT NULL REFERENCES machines(id),
+            label        TEXT    NOT NULL,
+            status       TEXT    NOT NULL DEFAULT 'active',
+            created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+            archived_at  TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS colleges (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT    NOT NULL,
+            archived_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS users (
@@ -51,7 +71,7 @@ async def _create_tables(db: aiosqlite.Connection) -> None:
             discord_name TEXT,
             email        TEXT    UNIQUE,
             verified     INTEGER NOT NULL DEFAULT 0,
-            college      TEXT,
+            college_id   INTEGER REFERENCES colleges(id),
             major        TEXT,
             created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
         );
@@ -79,6 +99,14 @@ async def _create_tables(db: aiosqlite.Connection) -> None:
             used       INTEGER NOT NULL DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS staff_users (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            username      TEXT    UNIQUE NOT NULL,
+            password_hash TEXT    NOT NULL,
+            role          TEXT    NOT NULL DEFAULT 'staff',
+            created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE TABLE IF NOT EXISTS analytics_snapshots (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
             date           TEXT    NOT NULL,
@@ -88,7 +116,42 @@ async def _create_tables(db: aiosqlite.Connection) -> None:
             avg_wait_mins  REAL,
             avg_serve_mins REAL,
             peak_hour      INTEGER,
-            ai_summary     TEXT
+            ai_summary     TEXT,
+            avg_rating     REAL,
+            rating_count   INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key        TEXT PRIMARY KEY,
+            value      TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_conversations (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            staff_user_id INTEGER NOT NULL REFERENCES staff_users(id),
+            title         TEXT    NOT NULL DEFAULT 'New chat',
+            created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+            updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+            role            TEXT    NOT NULL CHECK (role IN ('user','assistant','system','tool')),
+            content         TEXT    NOT NULL,
+            tool_call_id    TEXT,
+            tool_calls_json TEXT,
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS feedback (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            queue_entry_id  INTEGER NOT NULL UNIQUE
+                            REFERENCES queue_entries(id) ON DELETE CASCADE,
+            rating          INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+            comment         TEXT,
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
         );
 
         CREATE INDEX IF NOT EXISTS idx_queue_status
@@ -106,6 +169,70 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     columns = {row[1] for row in await cursor.fetchall()}
     if "embed_message_id" not in columns:
         await db.execute("ALTER TABLE machines ADD COLUMN embed_message_id TEXT")
+    if "archived_at" not in columns:
+        await db.execute("ALTER TABLE machines ADD COLUMN archived_at TEXT")
+
+    # Partial unique index on slug among active (non-archived) machines.
+    # Must run after archived_at exists.
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_machines_slug_active "
+        "ON machines(slug) WHERE archived_at IS NULL"
+    )
+
+    # machine_units may be missing on upgrades from pre-multi-unit DBs.
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS machine_units (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_id   INTEGER NOT NULL REFERENCES machines(id),
+            label        TEXT    NOT NULL,
+            status       TEXT    NOT NULL DEFAULT 'active',
+            created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+            archived_at  TEXT
+        )
+        """
+    )
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_machine_units_label_active "
+        "ON machine_units(machine_id, label) WHERE archived_at IS NULL"
+    )
+
+    # Add queue_entries.unit_id if missing
+    cursor = await db.execute("PRAGMA table_info(queue_entries)")
+    qe_cols = {row[1] for row in await cursor.fetchall()}
+    if "unit_id" not in qe_cols:
+        await db.execute(
+            "ALTER TABLE queue_entries "
+            "ADD COLUMN unit_id INTEGER REFERENCES machine_units(id)"
+        )
+
+    # Backfill: every non-archived machine with zero units gets a "Main" unit.
+    # Runs here for upgrade paths (where existing machines predate units).
+    # Also re-invoked after _seed_machines in init_db so seeded machines are covered.
+    await _backfill_main_units(db)
+
+    # Add role to staff_users if missing
+    cursor = await db.execute("PRAGMA table_info(staff_users)")
+    staff_columns = {row[1] for row in await cursor.fetchall()}
+    if "role" not in staff_columns:
+        await db.execute(
+            "ALTER TABLE staff_users ADD COLUMN role TEXT NOT NULL DEFAULT 'staff'"
+        )
+
+    # Ensure at least one admin exists when staff rows are present
+    row = await (await db.execute(
+        "SELECT COUNT(*) AS cnt FROM staff_users WHERE role = 'admin'"
+    )).fetchone()
+    admin_count = row[0]
+    row = await (await db.execute(
+        "SELECT COUNT(*) AS cnt FROM staff_users"
+    )).fetchone()
+    total_count = row[0]
+    if total_count > 0 and admin_count == 0:
+        await db.execute(
+            "UPDATE staff_users SET role = 'admin' "
+            "WHERE id = (SELECT MIN(id) FROM staff_users)"
+        )
 
     # Add signup fields to users if missing
     cursor = await db.execute("PRAGMA table_info(users)")
@@ -117,6 +244,18 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     if "registered" not in user_columns:
         await db.execute(
             "ALTER TABLE users ADD COLUMN registered INTEGER NOT NULL DEFAULT 0"
+        )
+
+    # Add role to staff_users if missing; backfill first (oldest) user as admin
+    cursor = await db.execute("PRAGMA table_info(staff_users)")
+    staff_columns = {row[1] for row in await cursor.fetchall()}
+    if "role" not in staff_columns:
+        await db.execute(
+            "ALTER TABLE staff_users ADD COLUMN role TEXT NOT NULL DEFAULT 'staff'"
+        )
+        await db.execute(
+            "UPDATE staff_users SET role = 'admin' "
+            "WHERE id = (SELECT MIN(id) FROM staff_users)"
         )
 
     # Add new analytics columns if missing
@@ -139,6 +278,152 @@ async def _migrate(db: aiosqlite.Connection) -> None:
             "ALTER TABLE analytics_snapshots ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0"
         )
 
+    # Colleges table — may be missing on upgrades.
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS colleges (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            archived_at TEXT
+        )
+        """
+    )
+    # Partial unique index AFTER the table exists (learnings.md 2026-04-22).
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_colleges_name_active "
+        "ON colleges(name) WHERE archived_at IS NULL"
+    )
+
+    # Add users.college_id (nullable FK).
+    cursor = await db.execute("PRAGMA table_info(users)")
+    user_cols_v2 = {row[1] for row in await cursor.fetchall()}
+    if "college_id" not in user_cols_v2:
+        await db.execute(
+            "ALTER TABLE users ADD COLUMN college_id INTEGER REFERENCES colleges(id)"
+        )
+
+    # Drop legacy users.college (free-text, replaced by FK). Safe on SQLite >= 3.35.
+    if "college" in user_cols_v2:
+        await db.execute("ALTER TABLE users DROP COLUMN college")
+
+    # Re-signup wipe: any user previously marked registered=1 must re-pick a college.
+    # Idempotent — once flipped to 0 they no longer match the predicate.
+    await db.execute("UPDATE users SET registered = 0 WHERE registered = 1")
+
+    # Feedback table — additive on upgrade.
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS feedback (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            queue_entry_id  INTEGER NOT NULL UNIQUE
+                            REFERENCES queue_entries(id) ON DELETE CASCADE,
+            rating          INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+            comment         TEXT,
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_feedback_created_at "
+        "ON feedback(created_at DESC)"
+    )
+
+    cursor = await db.execute("PRAGMA table_info(analytics_snapshots)")
+    snap_cols_v3 = {row[1] for row in await cursor.fetchall()}
+    if "avg_rating" not in snap_cols_v3:
+        await db.execute("ALTER TABLE analytics_snapshots ADD COLUMN avg_rating REAL")
+    if "rating_count" not in snap_cols_v3:
+        await db.execute(
+            "ALTER TABLE analytics_snapshots "
+            "ADD COLUMN rating_count INTEGER NOT NULL DEFAULT 0"
+        )
+
+    # Chat tables (analytics chatbot) — additive on upgrade.
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chat_conversations (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            staff_user_id INTEGER NOT NULL REFERENCES staff_users(id),
+            title         TEXT    NOT NULL DEFAULT 'New chat',
+            created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+            updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+            role            TEXT    NOT NULL CHECK (role IN ('user','assistant','system','tool')),
+            content         TEXT    NOT NULL,
+            tool_call_id    TEXT,
+            tool_calls_json TEXT,
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_msgs_conv "
+        "ON chat_messages(conversation_id, id)"
+    )
+
+
+async def _backfill_main_units(db: aiosqlite.Connection) -> None:
+    """Ensure every non-archived machine has at least one active unit.
+
+    Idempotent: only inserts a 'Main' unit for machines that currently have
+    zero non-archived units. Called from _migrate (for upgrade paths) and
+    again from init_db after _seed_machines (so seeded machines are covered).
+    """
+    await db.execute(
+        """
+        INSERT INTO machine_units (machine_id, label)
+        SELECT m.id, 'Main'
+        FROM machines m
+        WHERE m.archived_at IS NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM machine_units u
+              WHERE u.machine_id = m.id AND u.archived_at IS NULL
+          )
+        """
+    )
+
+
+async def _seed_staff(db: aiosqlite.Connection) -> None:
+    """Seed the default staff user from env if staff_users is empty."""
+    from api.auth import hash_password
+
+    cursor = await db.execute("SELECT COUNT(*) AS cnt FROM staff_users")
+    row = await cursor.fetchone()
+    if row[0] > 0:
+        return
+    username = settings.staff_username
+    password = settings.staff_password
+    if not username or not password:
+        return
+    await db.execute(
+        "INSERT INTO staff_users (username, password_hash, role) VALUES (?, ?, ?)",
+        (username, hash_password(password), "admin"),
+    )
+
+
+async def _seed_settings(db: aiosqlite.Connection) -> None:
+    """Insert default runtime settings if missing."""
+    defaults = {
+        "reminder_minutes":   str(settings.reminder_minutes),
+        "grace_minutes":      str(settings.grace_minutes),
+        "queue_reset_hour":   str(settings.queue_reset_hour),
+        "agent_tick_seconds": str(settings.agent_tick_seconds),
+        "public_mode":        "false",
+        "maintenance_banner": "",
+    }
+    for key, value in defaults.items():
+        await db.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+
 
 async def _seed_machines(db: aiosqlite.Connection) -> None:
     """Insert the SCD machines if they don't already exist."""
@@ -154,4 +439,36 @@ async def _seed_machines(db: aiosqlite.Connection) -> None:
         await db.execute(
             "INSERT OR IGNORE INTO machines (name, slug) VALUES (?, ?)",
             (name, slug),
+        )
+
+
+async def _seed_colleges(db: aiosqlite.Connection) -> None:
+    """Seed the standard UIUC colleges if missing. Idempotent."""
+    colleges = [
+        "Grainger College of Engineering",
+        "Gies College of Business",
+        "College of Liberal Arts and Sciences",
+        "College of Agricultural, Consumer and Environmental Sciences",
+        "College of Education",
+        "College of Fine and Applied Arts",
+        "College of Media",
+        "School of Information Sciences",
+        "College of Applied Health Sciences",
+        "Division of General Studies",
+        "School of Social Work",
+        "School of Labor and Employment Relations",
+        "Carle Illinois College of Medicine",
+        "College of Veterinary Medicine",
+        "College of Law",
+    ]
+    for name in colleges:
+        await db.execute(
+            """
+            INSERT INTO colleges (name)
+            SELECT ?
+            WHERE NOT EXISTS (
+                SELECT 1 FROM colleges WHERE name = ? AND archived_at IS NULL
+            )
+            """,
+            (name, name),
         )

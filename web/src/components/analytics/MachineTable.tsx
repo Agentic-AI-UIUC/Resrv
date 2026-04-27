@@ -22,6 +22,7 @@ export function MachineTable({ machines }: Props) {
               <th className="px-3 py-2 font-medium text-right">Avg Serve</th>
               <th className="px-3 py-2 font-medium text-right">No-shows</th>
               <th className="px-3 py-2 font-medium text-right">Failures</th>
+              <th className="px-3 py-2 font-medium text-right">Rating</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -41,6 +42,11 @@ export function MachineTable({ machines }: Props) {
                 </td>
                 <td className="px-3 py-3 text-right">{m.no_show_count}</td>
                 <td className="px-3 py-3 text-right">{m.failure_count}</td>
+                <td className="px-3 py-3 text-right text-amber-500 text-xs">
+                  {m.avg_rating != null
+                    ? `\u2605 ${m.avg_rating.toFixed(1)} (${m.rating_count})`
+                    : "\u2605 — (0)"}
+                </td>
               </tr>
             ))}
           </tbody>

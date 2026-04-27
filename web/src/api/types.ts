@@ -10,8 +10,26 @@ export interface QueueEntry {
   reminded: number;
   job_successful: number | null;
   failure_notes: string | null;
+  unit_id: number | null;
   discord_id: string | null;
   discord_name: string | null;
+}
+
+export type UnitStatus = "active" | "maintenance";
+
+export interface MachineUnit {
+  id: number;
+  machine_id: number;
+  label: string;
+  status: UnitStatus;
+  archived_at: string | null;
+  created_at: string;
+}
+
+export interface UnitSummary {
+  id: number;
+  label: string;
+  status: UnitStatus;
 }
 
 export interface Machine {
@@ -20,6 +38,8 @@ export interface Machine {
   slug: string;
   status: "active" | "maintenance" | "offline";
   created_at: string;
+  archived_at?: string | null;
+  units: UnitSummary[];
 }
 
 export interface MachineQueue {
@@ -28,6 +48,7 @@ export interface MachineQueue {
   machine_slug: string;
   machine_status: string;
   entries: QueueEntry[];
+  units: UnitSummary[];
 }
 
 // ── Analytics ───────────────────────────────────────────────────────────
@@ -45,6 +66,8 @@ export interface MachineStat {
   failure_count: number;
   peak_hour: number | null;
   ai_summary: string | null;
+  avg_rating: number | null;
+  rating_count: number;
 }
 
 export interface DailyBreakdown {
@@ -62,6 +85,37 @@ export interface AnalyticsSummary {
   no_show_count: number;
   cancelled_count: number;
   failure_count: number;
+  avg_rating: number | null;
+  rating_count: number;
+}
+
+export interface CollegeStat {
+  college_id: number;
+  college_name: string;
+  total_jobs: number;
+  completed_jobs: number;
+  unique_users: number;
+  avg_wait_mins: number | null;
+  avg_serve_mins: number | null;
+  avg_rating: number | null;
+  rating_count: number;
+}
+
+// ── Feedback ────────────────────────────────────────────────────────────
+
+export interface FeedbackRow {
+  id: number;
+  queue_entry_id: number;
+  rating: number;
+  comment: string | null;
+  created_at: string;
+  user_id: number;
+  full_name: string | null;
+  discord_name: string | null;
+  machine_id: number;
+  machine_name: string;
+  college_id: number | null;
+  college_name: string;
 }
 
 export interface AnalyticsResponse {
@@ -71,6 +125,7 @@ export interface AnalyticsResponse {
   summary: AnalyticsSummary;
   machines: MachineStat[];
   daily_breakdown: DailyBreakdown[];
+  colleges: CollegeStat[];
 }
 
 export interface TodayResponse {
@@ -79,3 +134,63 @@ export interface TodayResponse {
 }
 
 export type AnalyticsPeriod = "day" | "week" | "month";
+
+// ── Analytics chatbot ───────────────────────────────────────────────────
+
+export interface ChatMessage {
+  id: number;
+  conversation_id: number;
+  role: "user" | "assistant" | "system" | "tool";
+  content: string;
+  created_at: string;
+}
+
+export interface ChatConversationSummary {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatConversationDetail {
+  id: number;
+  title: string;
+  messages: ChatMessage[];
+}
+
+export interface ChatPostRequest {
+  conversation_id?: number;
+  message: string;
+  period?: AnalyticsPeriod;
+  start_date?: string;
+  end_date?: string;
+  model?: string;
+}
+
+export interface ChatModelOption {
+  id: string;
+  label: string;
+}
+
+export interface ChatModelsResponse {
+  default: string;
+  models: ChatModelOption[];
+}
+
+export interface ChatPostResponse {
+  conversation_id: number;
+  message: ChatMessage;
+}
+
+// ── Colleges ────────────────────────────────────────────────────────────
+
+export interface CollegeSummary {
+  id: number;
+  name: string;
+}
+
+export interface AdminCollege {
+  id: number;
+  name: string;
+  archived_at: string | null;
+}

@@ -238,6 +238,105 @@ async def test_daily_reset_does_not_touch_today(db):
     assert updated["status"] == "waiting"
 
 
+# ── Capacity (multi-unit) ─────────────────────────────────────────────────
+
+
+async def test_agent_promotes_up_to_unit_capacity(db):
+    """3 active units ⇒ 3 promoted, then queue holds."""
+    machine = await models.get_machine_by_slug("laser-cutter")
+    mid = machine["id"]
+    await models.create_unit(machine_id=mid, label="U2")
+    await models.create_unit(machine_id=mid, label="U3")
+
+    for i in range(5):
+        u = await models.get_or_create_user(str(100 + i), f"user{i}")
+        await models.join_queue(u["id"], mid)
+
+    await _process_machines()
+
+    assert await models.count_serving_on_machine(mid) == 3
+
+    from db.database import get_db
+    conn = await get_db()
+    cursor = await conn.execute(
+        "SELECT unit_id FROM queue_entries "
+        "WHERE machine_id = ? AND status = 'serving'",
+        (mid,),
+    )
+    unit_ids = [r["unit_id"] for r in await cursor.fetchall()]
+    assert None not in unit_ids
+    assert len(set(unit_ids)) == 3
+
+
+async def test_agent_respects_maintenance_unit(db):
+    """A maintenance unit doesn't count toward capacity."""
+    machine = await models.get_machine_by_slug("laser-cutter")
+    mid = machine["id"]
+    await models.create_unit(machine_id=mid, label="U2")
+    u3 = await models.create_unit(machine_id=mid, label="U3")
+    await models.update_unit(u3["id"], status="maintenance")
+
+    for i in range(3):
+        user = await models.get_or_create_user(str(200 + i), f"m{i}")
+        await models.join_queue(user["id"], mid)
+
+    await _process_machines()
+
+    assert await models.count_serving_on_machine(mid) == 2
+
+
+# ── Daily analytics snapshot ─────────────────────────────────────────────
+
+
+async def test_daily_snapshot_includes_rating_columns(
+    db, monkeypatch: pytest.MonkeyPatch
+):
+    """The daily snapshot LEFT JOINs feedback so avg_rating + rating_count
+    land in analytics_snapshots."""
+    # Reset the once-per-day guard so the function actually runs in the test.
+    monkeypatch.setattr(agent_mod, "_last_snapshot_date", None)
+    # Skip the OpenAI call.
+    async def _no_ai(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(agent_mod, "_generate_ai_summary", _no_ai)
+
+    machine = await models.get_machine_by_slug("laser-cutter")
+    user = await models.get_or_create_user("snap-1", "u")
+    entry = await models.join_queue(user["id"], machine["id"])
+    await models.update_entry_status(entry["id"], "serving")
+    await models.update_entry_status(entry["id"], "completed", job_successful=1)
+    await models.create_feedback(
+        queue_entry_id=entry["id"], rating=5, comment=None
+    )
+
+    # Backdate joined_at to yesterday so _compute_daily_analytics picks it up.
+    conn = await models.get_db()
+    await conn.execute(
+        """
+        UPDATE queue_entries
+        SET joined_at = datetime('now', '-1 day')
+        WHERE id = ?
+        """,
+        (entry["id"],),
+    )
+    await conn.commit()
+
+    from agent.loop import _compute_daily_analytics
+
+    await _compute_daily_analytics()
+
+    cursor = await conn.execute(
+        "SELECT avg_rating, rating_count FROM analytics_snapshots "
+        "WHERE machine_id = ? ORDER BY id DESC LIMIT 1",
+        (machine["id"],),
+    )
+    row = await cursor.fetchone()
+    assert row is not None
+    assert row["rating_count"] == 1
+    assert row["avg_rating"] == 5.0
+
+
 # ── Test helper ──────────────────────────────────────────────────────────
 
 

@@ -14,13 +14,23 @@ class Settings(BaseSettings):
     # Database
     database_path: str = "reserv.db"
 
+    # Staff auth
+    staff_username: str = "admin"
+    staff_password: str = "changeme"
+    auth_secret: str = "dev-secret-change-me"
+    auth_token_ttl_hours: int = 12
+
     # Queue behaviour
     queue_reset_hour: int = 0  # midnight
     reminder_minutes: int = 30
     grace_minutes: int = 10
     agent_tick_seconds: int = 10
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
 
 settings = Settings()
