@@ -74,6 +74,12 @@ Update `memory.md` whenever something significant changes. Read it at the start 
 - Analytics dashboard + chatbot now group/filter by college. `compute_analytics_response` accepts `college_id`; the response always contains a `colleges` block with an "Unspecified" bucket for users with `college_id IS NULL`. Frontend gets a college filter dropdown, active filter chip, and a "By College" bar chart card.
 - Conventions: `confirm_name` retype required for purge (mirrors `confirm_slug`); soft-delete via `archived_at` + partial unique index `idx_colleges_name_active`; `DuplicateCollegeError` (409) + `CollegeInUseError` (409) raised by helpers; admin /profile modal drops the college field (users re-pick via Join Queue).
 
+### 2026-04-27 — Post-Visit Feedback (Discord rating + analytics rollup)
+- After acknowledging a completion ("Did your job succeed? Yes/No"), the user gets a follow-up DM with a 5-star rating view; clicking a star opens an optional comment modal. One feedback per visit (UNIQUE on `queue_entry_id`); cascades on entry delete.
+- New `feedback` table; `analytics_snapshots` gains `avg_rating` + `rating_count`. `compute_analytics_response` merges feedback aggregates into the summary, machines, and colleges blocks; chatbot picks up the dimension automatically.
+- New `/admin/feedback` page lists recent ratings with full attribution (`full_name`, college, machine), filterable by machine / college / rating. Staff-readable, no admin write surface.
+- Conventions: `FeedbackAlreadyExistsError` (modal-side ephemeral), `★ x.x (n)` accents on machine/college analytics cards, daily snapshot now includes feedback aggregates, `send_rating_dm` only fires on user-acknowledged completions.
+
 ### 2026-04-22 — Multi-Unit Machines
 - New `machine_units` table; every existing machine backfilled with one "Main" unit. `queue_entries.unit_id` stamped on promotion.
 - Agent now promotes up to `count_active_units(machine)` in parallel; auto-assigns the first active unit without a live serving entry. Maintenance units exclude themselves from capacity.

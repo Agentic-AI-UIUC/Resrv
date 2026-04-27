@@ -1,5 +1,57 @@
 # Short-term Memory
 
+## 2026-04-27 — Post-Visit Feedback Form
+Shipped on `feat/customizable-admin`. 231 tests passing, tsc clean.
+
+**Backend:**
+- New `feedback` table (id, queue_entry_id UNIQUE FK ON DELETE CASCADE,
+  rating CHECK(1..5), comment TEXT NULL, created_at) + `idx_feedback_created_at`
+  (created in `_migrate` post-CREATE).
+- `analytics_snapshots` gains `avg_rating REAL NULL` and
+  `rating_count INTEGER NOT NULL DEFAULT 0`.
+- `db/models.py`: `create_feedback`, `get_feedback_by_entry`, `list_feedback`
+  (joined w/ users + machines + colleges, composable filters), aggregate
+  helpers (overall, by_machine, by_college). `FeedbackAlreadyExistsError` on dup.
+- `api/routes/feedback.py`: staff GET `/api/feedback/` with filters
+  (`limit`, `machine_id`, `college_id`, `min_rating`, `max_rating`).
+  No write/edit endpoints — bot is the only writer.
+- `compute_analytics_response`: summary, machines, colleges blocks all gain
+  `avg_rating` + `rating_count`. Aggregates honor existing filters.
+- Daily snapshot (`agent/loop.py::_compute_daily_analytics`) LEFT JOINs feedback
+  for per-machine rating; `insert_analytics_snapshot` accepts the new kwargs.
+- Date-range filter fix: aggregate helpers use `date(f.created_at) BETWEEN
+  date(?) AND date(?)` so same-day timestamps aren't excluded.
+
+**Discord:**
+- `bot/cogs/dm.py`: new `RatingView` (`timeout=600`, 5 star buttons + Skip)
+  and `FeedbackModal` (one optional paragraph TextInput, max 500 chars).
+- `send_rating_dm` invoked once on the user-acknowledged completion path
+  (`intent="done"` + `status="serving"` in `_do_action`); not from
+  agent-driven or staff-completed paths.
+- `FeedbackAlreadyExistsError` → ephemeral "already submitted"; missing entry
+  → "Visit no longer found".
+
+**Frontend:**
+- Types: `FeedbackRow`, `avg_rating`/`rating_count` on `AnalyticsSummary`,
+  `MachineStat`, `CollegeStat`.
+- `listFeedback` admin client.
+- `/admin/feedback` page (staff-only): filter by machine/college/rating,
+  paginated list of joined rows with full attribution.
+- Analytics dashboard: 5th KPI "Avg Rating ★ X.X", new "Rating" column in
+  `MachineTable`, per-row accents on `MachineUtilization` and
+  `CollegeUtilization` charts.
+
+**Auth & scope:** GET `/api/feedback/` is staff-gated (`require_staff`); no write
+endpoints exist. Rating DMs only fire on the user-acknowledged completion path.
+
+**Docs:**
+- Design: `docs/plans/2026-04-27-feedback-form-design.md`.
+- Plan: `docs/plans/2026-04-27-feedback-form.md`.
+
+**Commits:** Task 1 `93fe832`, Task 2 `e72ddc0`, Task 3 `39975bf`, Task 4 `1ec13e2`,
+Task 5 `3eaf0a8`, Task 6 `0518689`, Task 7 `1eed447`, Task 8 `1231ce0`,
+Task 9 `1da4ccd`.
+
 ## 2026-04-26 — College Signup + Analytics-by-College
 Shipped on `feat/customizable-admin`. 200 tests passing, tsc clean.
 
