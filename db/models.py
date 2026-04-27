@@ -1141,3 +1141,170 @@ async def purge_college(college_id: int) -> bool:
     await db.commit()
     return cursor.rowcount > 0
 
+
+# ── Feedback ─────────────────────────────────────────────────────────────
+
+
+class FeedbackAlreadyExistsError(Exception):
+    """Raised when a queue_entry already has feedback."""
+
+
+async def create_feedback(
+    *, queue_entry_id: int, rating: int, comment: str | None
+) -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO feedback (queue_entry_id, rating, comment) "
+            "VALUES (?, ?, ?) RETURNING *",
+            (queue_entry_id, rating, comment),
+        )
+    except Exception as e:
+        if "UNIQUE" in str(e):
+            raise FeedbackAlreadyExistsError(queue_entry_id) from e
+        raise
+    row = await cursor.fetchone()
+    await db.commit()
+    return dict(row)
+
+
+async def get_feedback_by_entry(queue_entry_id: int) -> dict | None:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM feedback WHERE queue_entry_id = ?", (queue_entry_id,)
+    )
+    row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def list_feedback(
+    *,
+    limit: int = 50,
+    machine_id: int | None = None,
+    college_id: int | None = None,
+    min_rating: int | None = None,
+    max_rating: int | None = None,
+) -> list[dict]:
+    db = await get_db()
+    where = []
+    params: list = []
+    if machine_id is not None:
+        where.append("qe.machine_id = ?")
+        params.append(machine_id)
+    if college_id is not None:
+        where.append("u.college_id = ?")
+        params.append(college_id)
+    if min_rating is not None:
+        where.append("f.rating >= ?")
+        params.append(min_rating)
+    if max_rating is not None:
+        where.append("f.rating <= ?")
+        params.append(max_rating)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    sql = f"""
+        SELECT
+            f.id, f.queue_entry_id, f.rating, f.comment, f.created_at,
+            u.id           AS user_id,
+            u.full_name    AS full_name,
+            u.discord_name AS discord_name,
+            m.id           AS machine_id,
+            m.name         AS machine_name,
+            u.college_id   AS college_id,
+            COALESCE(c.name, 'Unspecified') AS college_name
+        FROM feedback f
+        JOIN queue_entries qe ON qe.id = f.queue_entry_id
+        JOIN users u          ON u.id  = qe.user_id
+        JOIN machines m       ON m.id  = qe.machine_id
+        LEFT JOIN colleges c  ON c.id  = u.college_id
+        {where_sql}
+        ORDER BY f.created_at DESC, f.id DESC
+        LIMIT ?
+    """
+    params.append(limit)
+    cursor = await db.execute(sql, tuple(params))
+    return [dict(r) for r in await cursor.fetchall()]
+
+
+async def feedback_aggregates_overall(
+    start: str, end: str, *,
+    college_id: int | None = None, machine_id: int | None = None,
+) -> dict:
+    db = await get_db()
+    where = ["f.created_at BETWEEN ? AND ?"]
+    params: list = [start, end]
+    if college_id is not None:
+        where.append("u.college_id = ?")
+        params.append(college_id)
+    if machine_id is not None:
+        where.append("qe.machine_id = ?")
+        params.append(machine_id)
+    sql = f"""
+        SELECT AVG(f.rating) AS avg_rating, COUNT(f.rating) AS rating_count
+        FROM feedback f
+        JOIN queue_entries qe ON qe.id = f.queue_entry_id
+        JOIN users u          ON u.id  = qe.user_id
+        WHERE {" AND ".join(where)}
+    """
+    row = await (await db.execute(sql, tuple(params))).fetchone()
+    return {"avg_rating": row["avg_rating"], "rating_count": row["rating_count"]}
+
+
+async def feedback_aggregates_by_machine(
+    start: str, end: str, *, college_id: int | None = None,
+) -> dict[int, dict]:
+    db = await get_db()
+    where = ["f.created_at BETWEEN ? AND ?"]
+    params: list = [start, end]
+    if college_id is not None:
+        where.append("u.college_id = ?")
+        params.append(college_id)
+    sql = f"""
+        SELECT qe.machine_id AS machine_id,
+               AVG(f.rating) AS avg_rating,
+               COUNT(f.rating) AS rating_count
+        FROM feedback f
+        JOIN queue_entries qe ON qe.id = f.queue_entry_id
+        JOIN users u          ON u.id  = qe.user_id
+        WHERE {" AND ".join(where)}
+        GROUP BY qe.machine_id
+    """
+    cursor = await db.execute(sql, tuple(params))
+    rows = await cursor.fetchall()
+    return {
+        row["machine_id"]: {
+            "avg_rating": row["avg_rating"],
+            "rating_count": row["rating_count"],
+        }
+        for row in rows
+    }
+
+
+async def feedback_aggregates_by_college(
+    start: str, end: str, *, machine_id: int | None = None,
+) -> dict[int, dict]:
+    db = await get_db()
+    where = ["f.created_at BETWEEN ? AND ?"]
+    params: list = [start, end]
+    if machine_id is not None:
+        where.append("qe.machine_id = ?")
+        params.append(machine_id)
+    sql = f"""
+        SELECT COALESCE(u.college_id, 0) AS college_id,
+               AVG(f.rating)              AS avg_rating,
+               COUNT(f.rating)            AS rating_count
+        FROM feedback f
+        JOIN queue_entries qe ON qe.id = f.queue_entry_id
+        JOIN users u          ON u.id  = qe.user_id
+        WHERE {" AND ".join(where)}
+        GROUP BY COALESCE(u.college_id, 0)
+    """
+    cursor = await db.execute(sql, tuple(params))
+    rows = await cursor.fetchall()
+    return {
+        row["college_id"]: {
+            "avg_rating": row["avg_rating"],
+            "rating_count": row["rating_count"],
+        }
+        for row in rows
+    }
+
