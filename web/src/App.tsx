@@ -8,6 +8,7 @@ import { Login } from "./pages/Login";
 import { AdminMachines } from "./pages/admin/Machines";
 import { AdminStaff } from "./pages/admin/Staff";
 import { AdminSettings } from "./pages/admin/Settings";
+import { AdminColleges } from "./pages/admin/Colleges";
 
 function RequireStaff({ children }: { children: React.ReactElement }) {
   const { username, loading } = useAuth();
@@ -73,6 +74,16 @@ export default function App() {
                   <RequireStaff>
                     <RequireAdmin>
                       <AdminStaff />
+                    </RequireAdmin>
+                  </RequireStaff>
+                }
+              />
+              <Route
+                path="/admin/colleges"
+                element={
+                  <RequireStaff>
+                    <RequireAdmin>
+                      <AdminColleges />
                     </RequireAdmin>
                   </RequireStaff>
                 }

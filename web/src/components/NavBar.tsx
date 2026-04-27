@@ -91,6 +91,14 @@ export function NavBar() {
             )}
             {isAdmin && (
               <Link
+                to="/admin/colleges"
+                className={linkClass("/admin/colleges")}
+              >
+                Colleges
+              </Link>
+            )}
+            {isAdmin && (
+              <Link
                 to="/admin/settings"
                 className={linkClass("/admin/settings")}
               >
