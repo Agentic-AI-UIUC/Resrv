@@ -44,6 +44,9 @@ export function useAnalytics(
 
         // Update summary
         const machines = Array.from(machineMap.values());
+        // Feedback aggregates stay on the historical block — the /today
+        // endpoint doesn't compute ratings, so merging would double-count
+        // nothing but also lose nothing.
         const summary = {
           total_jobs: machines.reduce((s, m) => s + m.total_jobs, 0),
           completed_jobs: machines.reduce((s, m) => s + m.completed_jobs, 0),
@@ -53,6 +56,8 @@ export function useAnalytics(
           failure_count: machines.reduce((s, m) => s + m.failure_count, 0),
           avg_wait_mins: historical.summary.avg_wait_mins,
           avg_serve_mins: historical.summary.avg_serve_mins,
+          avg_rating: historical.summary.avg_rating,
+          rating_count: historical.summary.rating_count,
         };
 
         // Add today to daily breakdown if not already there

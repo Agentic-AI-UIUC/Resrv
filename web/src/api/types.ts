@@ -66,6 +66,8 @@ export interface MachineStat {
   failure_count: number;
   peak_hour: number | null;
   ai_summary: string | null;
+  avg_rating: number | null;
+  rating_count: number;
 }
 
 export interface DailyBreakdown {
@@ -83,6 +85,8 @@ export interface AnalyticsSummary {
   no_show_count: number;
   cancelled_count: number;
   failure_count: number;
+  avg_rating: number | null;
+  rating_count: number;
 }
 
 export interface CollegeStat {
@@ -93,6 +97,25 @@ export interface CollegeStat {
   unique_users: number;
   avg_wait_mins: number | null;
   avg_serve_mins: number | null;
+  avg_rating: number | null;
+  rating_count: number;
+}
+
+// ── Feedback ────────────────────────────────────────────────────────────
+
+export interface FeedbackRow {
+  id: number;
+  queue_entry_id: number;
+  rating: number;
+  comment: string | null;
+  created_at: string;
+  user_id: number;
+  full_name: string | null;
+  discord_name: string | null;
+  machine_id: number;
+  machine_name: string;
+  college_id: number | null;
+  college_name: string;
 }
 
 export interface AnalyticsResponse {

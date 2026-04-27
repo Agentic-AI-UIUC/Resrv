@@ -40,6 +40,21 @@ export function MachineUtilization({ machines }: Props) {
           <Bar dataKey="completed" fill="#10b981" name="Completed" />
         </BarChart>
       </ResponsiveContainer>
+      <ul className="mt-3 space-y-1">
+        {machines.map((m) => (
+          <li
+            key={m.machine_id}
+            className="flex items-center justify-between text-xs"
+          >
+            <span className="text-gray-600">{m.machine_name}</span>
+            <span className="text-amber-500">
+              {m.avg_rating != null
+                ? `\u2605 ${m.avg_rating.toFixed(1)} (${m.rating_count})`
+                : "\u2605 — (0)"}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

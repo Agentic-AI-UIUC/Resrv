@@ -1,5 +1,5 @@
 import { request } from "./client";
-import type { AdminCollege } from "./types";
+import type { AdminCollege, FeedbackRow } from "./types";
 
 export type AdminUnit = {
   id: number;
@@ -182,3 +182,24 @@ export const purgeCollege = (id: number, confirm_name: string) =>
     method: "DELETE",
     body: JSON.stringify({ confirm_name }),
   });
+
+// ── Feedback ──
+
+export const listFeedback = (
+  params: {
+    machineId?: number;
+    collegeId?: number;
+    minRating?: number;
+    maxRating?: number;
+    limit?: number;
+  } = {},
+): Promise<FeedbackRow[]> => {
+  const qs = new URLSearchParams();
+  if (params.machineId) qs.set("machine_id", String(params.machineId));
+  if (params.collegeId) qs.set("college_id", String(params.collegeId));
+  if (params.minRating) qs.set("min_rating", String(params.minRating));
+  if (params.maxRating) qs.set("max_rating", String(params.maxRating));
+  if (params.limit) qs.set("limit", String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request<FeedbackRow[]>(`/feedback/${suffix}`);
+};

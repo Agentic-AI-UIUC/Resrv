@@ -46,33 +46,50 @@ export function CollegeUtilization({ colleges, onSelect }: Props) {
           No college data for this range.
         </div>
       ) : (
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={data} layout="vertical">
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-            <XAxis type="number" tick={{ fontSize: 12 }} />
-            <YAxis
-              dataKey="name"
-              type="category"
-              tick={{ fontSize: 12 }}
-              width={140}
-            />
-            <Tooltip />
-            <Bar
-              dataKey="total"
-              fill="#8b5cf6"
-              name="Total Jobs"
-              cursor={onSelect ? "pointer" : undefined}
-              onClick={handleClick}
-            />
-            <Bar
-              dataKey="completed"
-              fill="#10b981"
-              name="Completed"
-              cursor={onSelect ? "pointer" : undefined}
-              onClick={handleClick}
-            />
-          </BarChart>
-        </ResponsiveContainer>
+        <>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={data} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis type="number" tick={{ fontSize: 12 }} />
+              <YAxis
+                dataKey="name"
+                type="category"
+                tick={{ fontSize: 12 }}
+                width={140}
+              />
+              <Tooltip />
+              <Bar
+                dataKey="total"
+                fill="#8b5cf6"
+                name="Total Jobs"
+                cursor={onSelect ? "pointer" : undefined}
+                onClick={handleClick}
+              />
+              <Bar
+                dataKey="completed"
+                fill="#10b981"
+                name="Completed"
+                cursor={onSelect ? "pointer" : undefined}
+                onClick={handleClick}
+              />
+            </BarChart>
+          </ResponsiveContainer>
+          <ul className="mt-3 space-y-1">
+            {sorted.map((c) => (
+              <li
+                key={c.college_id}
+                className="flex items-center justify-between text-xs"
+              >
+                <span className="text-gray-600">{c.college_name}</span>
+                <span className="text-amber-500">
+                  {c.avg_rating != null
+                    ? `\u2605 ${c.avg_rating.toFixed(1)} (${c.rating_count})`
+                    : "\u2605 — (0)"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );
