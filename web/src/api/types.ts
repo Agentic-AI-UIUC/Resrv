@@ -85,6 +85,16 @@ export interface AnalyticsSummary {
   failure_count: number;
 }
 
+export interface CollegeStat {
+  college_id: number;
+  college_name: string;
+  total_jobs: number;
+  completed_jobs: number;
+  unique_users: number;
+  avg_wait_mins: number | null;
+  avg_serve_mins: number | null;
+}
+
 export interface AnalyticsResponse {
   period: string;
   start_date: string;
@@ -92,6 +102,7 @@ export interface AnalyticsResponse {
   summary: AnalyticsSummary;
   machines: MachineStat[];
   daily_breakdown: DailyBreakdown[];
+  colleges: CollegeStat[];
 }
 
 export interface TodayResponse {

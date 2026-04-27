@@ -2,7 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import type { AnalyticsResponse, AnalyticsPeriod, MachineStat } from "../api/types";
 import { fetchAnalytics, fetchTodayStats } from "../api/client";
 
-export function useAnalytics(period: AnalyticsPeriod = "week") {
+export function useAnalytics(
+  period: AnalyticsPeriod = "week",
+  collegeId: number | null = null,
+) {
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -11,12 +14,13 @@ export function useAnalytics(period: AnalyticsPeriod = "week") {
     setLoading(true);
     try {
       const [historical, today] = await Promise.all([
-        fetchAnalytics({ period }),
+        fetchAnalytics({ period, college_id: collegeId }),
         fetchTodayStats(),
       ]);
 
-      // Merge today's live stats into the historical response
-      if (today.machines.length > 0) {
+      // When filtering by college, the today endpoint isn't college-aware,
+      // so skip the merge to avoid double-counting unrelated jobs.
+      if (collegeId == null && today.machines.length > 0) {
         const todayDate = today.date;
 
         // Add today's machines into the machine list (merge by machine_id)
@@ -79,7 +83,7 @@ export function useAnalytics(period: AnalyticsPeriod = "week") {
     } finally {
       setLoading(false);
     }
-  }, [period]);
+  }, [period, collegeId]);
 
   useEffect(() => {
     refresh();
