@@ -478,6 +478,35 @@ async def _migrate(db: aiosqlite.Connection) -> None:
             "ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
         )
 
+    # queue_entries.purpose — 'production' (default) or 'training'.
+    cursor = await db.execute("PRAGMA table_info(queue_entries)")
+    qe_cols_v2 = {row[1] for row in await cursor.fetchall()}
+    if "purpose" not in qe_cols_v2:
+        await db.execute(
+            "ALTER TABLE queue_entries "
+            "ADD COLUMN purpose TEXT NOT NULL DEFAULT 'production'"
+        )
+
+    # Add time_limit_minutes to machines if missing
+    cursor = await db.execute("PRAGMA table_info(machines)")
+    machine_cols = {r[1] for r in await cursor.fetchall()}
+    if "time_limit_minutes" not in machine_cols:
+        await db.execute(
+            "ALTER TABLE machines ADD COLUMN time_limit_minutes INTEGER"
+        )
+
+    # Add time_limit_notified_at and extended_until to queue_entries if missing
+    cursor = await db.execute("PRAGMA table_info(queue_entries)")
+    qe_cols = {r[1] for r in await cursor.fetchall()}
+    if "time_limit_notified_at" not in qe_cols:
+        await db.execute(
+            "ALTER TABLE queue_entries ADD COLUMN time_limit_notified_at TEXT"
+        )
+    if "extended_until" not in qe_cols:
+        await db.execute(
+            "ALTER TABLE queue_entries ADD COLUMN extended_until TEXT"
+        )
+
 
 async def _backfill_main_units(db: aiosqlite.Connection) -> None:
     """Ensure every non-archived machine has at least one active unit.
@@ -540,12 +569,10 @@ async def _seed_settings(db: aiosqlite.Connection) -> None:
 async def _seed_machines(db: aiosqlite.Connection) -> None:
     """Insert the SCD machines if they don't already exist."""
     machines = [
-        ("Large Format Printer", "large-format-printer"),
+        ("Printer", "printer"),
         ("Laser Cutter", "laser-cutter"),
         ("CNC Router", "cnc-router"),
         ("Water Jet", "water-jet"),
-        ("3D Printer", "3d-printer"),
-        ("Sewing Machine", "sewing-machine"),
     ]
     for name, slug in machines:
         await db.execute(

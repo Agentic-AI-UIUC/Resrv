@@ -33,6 +33,7 @@ class MachineOut(BaseModel):
     name: str
     slug: str
     status: str
+    time_limit_minutes: int | None = None
     archived_at: str | None = None
     created_at: str
     units: list[UnitSummary] = []
@@ -56,6 +57,7 @@ class MachineUpdate(BaseModel):
     name: str | None = None
     slug: str | None = None
     status: Literal["active", "maintenance", "offline"] | None = None
+    time_limit_minutes: int | None = None
 
 
 class MachineStatusUpdate(BaseModel):
@@ -110,19 +112,32 @@ async def create(body: MachineCreate) -> dict:
 async def patch(machine_id: int, body: MachineUpdate) -> dict:
     if await models.get_machine(machine_id) is None:
         raise HTTPException(status_code=404, detail="Machine not found")
+    kwargs: dict = dict(name=body.name, slug=body.slug, status=body.status)
+    if "time_limit_minutes" in body.model_fields_set:
+        kwargs["time_limit_minutes"] = body.time_limit_minutes
     try:
-        await models.update_machine(
-            machine_id,
-            name=body.name,
-            slug=body.slug,
-            status=body.status,
-        )
+        await models.update_machine(machine_id, **kwargs)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     notify_embed_update(machine_id)
     updated = await models.get_machine(machine_id)
     assert updated is not None
     return await _attach_units(updated)
+
+
+@router.get(
+    "/{machine_id}/suggested-time-limit",
+    dependencies=[Depends(require_staff)],
+)
+async def suggested_time_limit(machine_id: int) -> dict:
+    machine = await models.get_machine(machine_id)
+    if machine is None:
+        raise HTTPException(status_code=404, detail="Machine not found")
+    avg = await models.get_avg_serve_minutes(machine_id, days=14)
+    if avg is None:
+        return {"suggested_minutes": None, "sample_days": 14}
+    rounded = round(avg / 5) * 5 or 5
+    return {"suggested_minutes": int(rounded), "sample_days": 14}
 
 
 # ── Admin-only endpoints ─────────────────────────────────────────────────

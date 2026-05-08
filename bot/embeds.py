@@ -123,9 +123,12 @@ def build_machine_embed(
     # Currently serving
     if serving:
         serving_entry = serving[0]
+        serving_label = serving_entry["discord_name"]
+        if serving_entry.get("purpose") == "training":
+            serving_label = f"[Training] {serving_label}"
         embed.add_field(
             name="Now Serving",
-            value=serving_entry["discord_name"],
+            value=serving_label,
             inline=False,
         )
     else:
@@ -135,7 +138,10 @@ def build_machine_embed(
     if waiting:
         lines: list[str] = []
         for idx, entry in enumerate(waiting, start=1):
-            lines.append(f"**{idx}.** {entry['discord_name']}")
+            name = entry["discord_name"]
+            if entry.get("purpose") == "training":
+                name = f"[Training] {name}"
+            lines.append(f"**{idx}.** {name}")
             if idx >= 10:
                 remaining = len(waiting) - 10
                 if remaining > 0:

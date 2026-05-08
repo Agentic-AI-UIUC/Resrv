@@ -47,15 +47,16 @@ export function CollegeUtilization({ colleges, onSelect }: Props) {
         </div>
       ) : (
         <>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={data} layout="vertical">
+          <ResponsiveContainer width="100%" height={Math.max(300, data.length * 60)}>
+            <BarChart data={data} layout="vertical" margin={{ left: 20 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis type="number" tick={{ fontSize: 12 }} />
               <YAxis
                 dataKey="name"
                 type="category"
-                tick={{ fontSize: 12 }}
-                width={140}
+                tick={{ fontSize: 11 }}
+                width={180}
+                tickFormatter={(v: string) => v.length > 28 ? v.slice(0, 26) + "…" : v}
               />
               <Tooltip />
               <Bar

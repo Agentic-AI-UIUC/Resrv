@@ -5,6 +5,7 @@ import {
   archiveUnit,
   createMachine,
   createUnit,
+  getSuggestedTimeLimit,
   listMachines,
   listUnits,
   patchMachine,
@@ -31,6 +32,10 @@ export function AdminMachines() {
   const [newUnitLabel, setNewUnitLabel] = useState<Record<number, string>>({});
   const [purgeUnitTarget, setPurgeUnitTarget] = useState<AdminUnit | null>(null);
   const [purgeUnitTyped, setPurgeUnitTyped] = useState("");
+  const [editingTimeLimitId, setEditingTimeLimitId] = useState<number | null>(null);
+  const [timeLimitDraft, setTimeLimitDraft] = useState("");
+  const [suggestedTime, setSuggestedTime] = useState<number | null>(null);
+  const [suggestedLoading, setSuggestedLoading] = useState(false);
 
   async function refresh() {
     try {
@@ -190,6 +195,30 @@ export function AdminMachines() {
     }
   }
 
+  function openTimeLimitEdit(m: AdminMachine) {
+    setEditingTimeLimitId(m.id);
+    setTimeLimitDraft(m.time_limit_minutes?.toString() ?? "");
+    setSuggestedTime(null);
+    setSuggestedLoading(true);
+    getSuggestedTimeLimit(m.id)
+      .then((res) => setSuggestedTime(res.suggested_minutes))
+      .catch(() => setSuggestedTime(null))
+      .finally(() => setSuggestedLoading(false));
+  }
+
+  async function handleTimeLimitSave(m: AdminMachine) {
+    setError(null);
+    const parsed = parseInt(timeLimitDraft, 10);
+    const value = isNaN(parsed) || parsed <= 0 ? 0 : parsed;
+    try {
+      await patchMachine(m.id, { time_limit_minutes: value || null });
+      setEditingTimeLimitId(null);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   const active = machines.filter((m) => !m.archived_at);
   const archived = machines.filter((m) => m.archived_at);
 
@@ -270,6 +299,9 @@ export function AdminMachines() {
                 <th className="px-4 py-2 text-left text-xs font-semibold uppercase text-gray-500">
                   Status
                 </th>
+                <th className="px-4 py-2 text-left text-xs font-semibold uppercase text-gray-500">
+                  Time Limit
+                </th>
                 <th className="px-4 py-2 text-right text-xs font-semibold uppercase text-gray-500">
                   Actions
                 </th>
@@ -307,6 +339,56 @@ export function AdminMachines() {
                         <option value="offline">offline</option>
                       </select>
                     </td>
+                    <td className="px-4 py-3">
+                      {editingTimeLimitId === m.id ? (
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min="0"
+                              value={timeLimitDraft}
+                              onChange={(e) => setTimeLimitDraft(e.target.value)}
+                              placeholder="minutes"
+                              className="w-24 rounded border border-gray-300 px-2 py-1 text-sm"
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleTimeLimitSave(m);
+                                if (e.key === "Escape") setEditingTimeLimitId(null);
+                              }}
+                              autoFocus
+                            />
+                            <button
+                              onClick={() => handleTimeLimitSave(m)}
+                              className="rounded border border-indigo-300 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
+                            >
+                              Save
+                            </button>
+                            <button
+                              onClick={() => setEditingTimeLimitId(null)}
+                              className="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {suggestedLoading
+                              ? "Loading suggestion..."
+                              : suggestedTime != null
+                                ? `Suggested: ${suggestedTime} min (2-week avg)`
+                                : "No data for suggestion"}
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => openTimeLimitEdit(m)}
+                          className="text-sm text-gray-600 hover:text-indigo-600 hover:underline"
+                        >
+                          {m.time_limit_minutes
+                            ? `${m.time_limit_minutes} min`
+                            : "—"}
+                        </button>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-right">
                       {isAdmin && (
                         <div className="flex justify-end gap-2">
@@ -328,7 +410,7 @@ export function AdminMachines() {
                   </tr>
                   {expanded.has(m.id) && (
                     <tr className="bg-gray-50">
-                      <td colSpan={4} className="px-4 py-3">
+                      <td colSpan={5} className="px-4 py-3">
                         <div className="space-y-2">
                           <div className="text-xs font-semibold uppercase text-gray-500">
                             Units
@@ -418,7 +500,7 @@ export function AdminMachines() {
               ))}
               {active.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-4 py-6 text-center text-sm text-gray-500">
+                  <td colSpan={5} className="px-4 py-6 text-center text-sm text-gray-500">
                     No active machines.
                   </td>
                 </tr>

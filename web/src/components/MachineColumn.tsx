@@ -7,12 +7,13 @@ import {
   bumpEntry,
   leaveEntry,
   patchMachineStatus,
+  undoRemoval,
 } from "../api/client";
 
-const headerColors: Record<string, string> = {
-  active: "bg-emerald-600",
-  maintenance: "bg-amber-500",
-  offline: "bg-red-600",
+const headerGradients: Record<string, string> = {
+  active: "from-[#13294B] to-[#1e3a5f]",
+  maintenance: "from-amber-500 to-orange-500",
+  offline: "from-gray-500 to-gray-600",
 };
 
 interface Props {
@@ -51,37 +52,42 @@ export function MachineColumn({ queue, onRefresh }: Props) {
   }
 
   return (
-    <div className="flex flex-col rounded-xl border border-gray-200 bg-gray-50 shadow-sm overflow-hidden min-w-[280px] max-w-[340px] w-full">
+    <div className="flex flex-col rounded-2xl border border-gray-200/60 bg-white shadow-md hover:shadow-lg transition-shadow duration-300 overflow-hidden min-w-[280px] max-w-[340px] w-full">
       {/* Header */}
       <div
-        className={`${headerColors[queue.machine_status] ?? "bg-gray-500"} px-4 py-3 text-white`}
+        className={`bg-gradient-to-br ${headerGradients[queue.machine_status] ?? "from-gray-500 to-gray-600"} px-4 py-4 text-white`}
       >
         <div className="flex items-center justify-between">
-          <h2 className="font-semibold text-base">{queue.machine_name}</h2>
+          <h2 className="font-bold text-lg tracking-tight">{queue.machine_name}</h2>
           <StatusBadge status={queue.machine_status} />
         </div>
-        <div className="mt-1 flex items-center gap-3 text-sm text-white/80">
-          <span>{waiting.length} waiting</span>
-          <span>&middot;</span>
-          <span>{serving.length} serving</span>
+        <div className="mt-2 flex items-center gap-4 text-sm text-white/80">
+          <span className="flex items-center gap-1">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            {waiting.length} waiting
+          </span>
+          <span className="flex items-center gap-1">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+            {serving.length} serving
+          </span>
         </div>
       </div>
 
       {/* Units chip strip */}
       {showUnitStrip && (
-        <div className="flex flex-wrap gap-1 px-3 pt-2">
+        <div className="flex flex-wrap gap-1.5 px-4 pt-3">
           {queue.units.map((u) => {
             const servingName = servingByUnit.get(u.id);
             const cls =
               u.status === "maintenance"
-                ? "bg-gray-200 text-gray-600"
+                ? "bg-gray-100 text-gray-500 border-gray-200"
                 : servingName
-                  ? "bg-sky-100 text-sky-800"
-                  : "bg-emerald-100 text-emerald-800";
+                  ? "bg-[#13294B]/10 text-[#13294B] border-[#13294B]/20"
+                  : "bg-[#E84A27]/10 text-[#E84A27] border-[#E84A27]/20";
             return (
               <span
                 key={u.id}
-                className={`rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}
+                className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${cls}`}
                 title={
                   u.status === "maintenance"
                     ? "maintenance"
@@ -99,22 +105,28 @@ export function MachineColumn({ queue, onRefresh }: Props) {
         </div>
       )}
 
-      {/* Pause / Resume */}
-      <div className="px-3 pt-2">
+      {/* Actions */}
+      <div className="px-4 pt-3 flex gap-2">
         <button
           onClick={togglePause}
-          className={`w-full rounded-md border px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
+          className={`flex-1 rounded-xl border px-3 py-2 text-xs font-semibold transition-all duration-200 cursor-pointer ${
             queue.machine_status === "active"
-              ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
-              : "border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+              ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:shadow-sm"
+              : "border-[#E84A27]/30 bg-[#E84A27]/10 text-[#E84A27] hover:bg-[#E84A27]/20 hover:shadow-sm"
           }`}
         >
-          {queue.machine_status === "active" ? "Pause Machine" : "Resume Machine"}
+          {queue.machine_status === "active" ? "Pause" : "Resume"}
+        </button>
+        <button
+          onClick={() => act(() => undoRemoval(queue.machine_id))}
+          className="flex-1 rounded-xl border border-[#13294B]/20 bg-[#13294B]/5 text-[#13294B] hover:bg-[#13294B]/10 hover:shadow-sm px-3 py-2 text-xs font-semibold transition-all duration-200 cursor-pointer"
+        >
+          Undo Remove
         </button>
       </div>
 
       {/* Queue entries */}
-      <div className="flex flex-col gap-2 p-3 overflow-y-auto max-h-[60vh]">
+      <div className="flex flex-col gap-2 p-4 overflow-y-auto max-h-[60vh]">
         {serving.map((entry) => (
           <QueueCard
             key={entry.id}
@@ -125,7 +137,7 @@ export function MachineColumn({ queue, onRefresh }: Props) {
         ))}
 
         {waiting.length > 0 && serving.length > 0 && (
-          <div className="border-t border-dashed border-gray-300 my-1" />
+          <div className="border-t border-dashed border-gray-200 my-1" />
         )}
 
         {waiting.map((entry, i) => (
@@ -140,7 +152,7 @@ export function MachineColumn({ queue, onRefresh }: Props) {
         ))}
 
         {queue.entries.length === 0 && (
-          <p className="py-8 text-center text-sm text-gray-400">
+          <p className="py-8 text-center text-sm text-gray-400 italic">
             Queue is empty
           </p>
         )}

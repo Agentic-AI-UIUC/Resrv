@@ -28,21 +28,24 @@ export function QueueCard({
 }: Props) {
   const borderColor =
     entry.status === "serving"
-      ? "border-l-emerald-500"
+      ? "border-l-[#E84A27] bg-orange-50/30"
       : entry.status === "waiting"
-        ? "border-l-sky-400"
+        ? "border-l-[#13294B]"
         : "border-l-gray-300";
 
   return (
     <div
-      className={`rounded-lg border border-gray-200 bg-white p-3 shadow-sm border-l-4 ${borderColor}`}
+      className={`rounded-xl border border-gray-100 bg-white p-3.5 shadow-sm hover:shadow-md transition-all duration-200 border-l-4 ${borderColor}`}
     >
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
-          <p className="truncate font-medium text-gray-900 text-sm">
+          <p className="truncate font-semibold text-gray-900 text-sm">
+            {entry.purpose === "training" && (
+              <span className="inline-flex items-center rounded-md bg-[#E84A27]/10 text-[#E84A27] px-1.5 py-0.5 text-[10px] font-bold mr-1.5 uppercase tracking-wide">Train</span>
+            )}
             {entry.discord_name ?? "Unknown"}
           </p>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-gray-400 mt-0.5">
             {entry.status === "serving"
               ? "serving"
               : `#${displayPosition ?? entry.position}`}{" "}
@@ -52,20 +55,20 @@ export function QueueCard({
         <StatusBadge status={entry.status} />
       </div>
 
-      <div className="mt-2 flex flex-wrap gap-1.5">
+      <div className="mt-2.5 flex flex-wrap gap-1.5">
         {entry.status === "waiting" && onServe && (
-          <ActionBtn color="emerald" onClick={onServe}>
+          <ActionBtn color="orange" onClick={onServe}>
             Serve
           </ActionBtn>
         )}
         {entry.status === "waiting" && onBump && (
-          <ActionBtn color="sky" onClick={onBump}>
+          <ActionBtn color="navy" onClick={onBump}>
             Bump
           </ActionBtn>
         )}
         {entry.status === "serving" && onComplete && (
           <>
-            <ActionBtn color="emerald" onClick={() => onComplete(true)}>
+            <ActionBtn color="orange" onClick={() => onComplete(true)}>
               Done
             </ActionBtn>
             <ActionBtn color="amber" onClick={() => onComplete(false)}>
@@ -94,9 +97,9 @@ function ActionBtn({
   onClick: () => void;
 }) {
   const styles: Record<string, string> = {
-    emerald:
-      "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border-emerald-200",
-    sky: "bg-sky-50 text-sky-700 hover:bg-sky-100 border-sky-200",
+    orange:
+      "bg-[#E84A27]/10 text-[#E84A27] hover:bg-[#E84A27]/20 border-[#E84A27]/20",
+    navy: "bg-[#13294B]/10 text-[#13294B] hover:bg-[#13294B]/20 border-[#13294B]/20",
     amber: "bg-amber-50 text-amber-700 hover:bg-amber-100 border-amber-200",
     red: "bg-red-50 text-red-700 hover:bg-red-100 border-red-200",
   };
@@ -104,7 +107,7 @@ function ActionBtn({
   return (
     <button
       onClick={onClick}
-      className={`rounded border px-2 py-0.5 text-xs font-medium transition-colors cursor-pointer ${styles[color] ?? ""}`}
+      className={`rounded-lg border px-2.5 py-1 text-xs font-semibold transition-all duration-200 cursor-pointer hover:shadow-sm ${styles[color] ?? ""}`}
     >
       {children}
     </button>

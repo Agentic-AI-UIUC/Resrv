@@ -21,6 +21,7 @@ export type AdminMachine = {
   name: string;
   slug: string;
   status: string;
+  time_limit_minutes: number | null;
   archived_at: string | null;
   created_at: string;
   embed_message_id?: string | null;
@@ -40,7 +41,7 @@ export const createMachine = (name: string, slug: string) =>
 
 export const patchMachine = (
   id: number,
-  body: Partial<{ name: string; slug: string; status: string }>
+  body: Partial<{ name: string; slug: string; status: string; time_limit_minutes: number | null }>
 ) =>
   request<AdminMachine>(`/machines/${id}`, {
     method: "PATCH",
@@ -61,6 +62,11 @@ export const purgeMachine = (id: number, confirm_slug: string) =>
 
 export const restoreMachine = (id: number) =>
   request<AdminMachine>(`/machines/${id}/restore`, { method: "POST" });
+
+export const getSuggestedTimeLimit = (machineId: number) =>
+  request<{ suggested_minutes: number | null; sample_days: number }>(
+    `/machines/${machineId}/suggested-time-limit`
+  );
 
 // ── Machine Units ──
 

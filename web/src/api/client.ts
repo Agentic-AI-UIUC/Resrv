@@ -154,6 +154,9 @@ export const completeEntry = (
 export const bumpEntry = (entryId: number) =>
   request<QueueEntry>(`/queue/${entryId}/bump`, { method: "POST" });
 
+export const undoRemoval = (machineId: number) =>
+  request<QueueEntry>(`/queue/${machineId}/undo`, { method: "POST" });
+
 // -- Colleges (public) --
 
 export const listColleges = () => request<CollegeSummary[]>("/colleges/");

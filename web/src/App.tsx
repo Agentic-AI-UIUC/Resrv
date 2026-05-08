@@ -77,7 +77,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <div className="min-h-screen bg-gray-100">
+        <div className="min-h-screen bg-gradient-to-br from-slate-50 to-gray-100">
           <MaintenanceBanner />
           <NavBar />
           <OnboardingGate />
@@ -145,8 +145,8 @@ export default function App() {
               />
             </Routes>
           </main>
-          <footer className="py-6 text-center text-sm text-gray-400">
-            Built by <span className="font-bold">Agentic AI @ UIUC</span>
+          <footer className="py-8 text-center text-sm text-gray-400">
+            Built by <span className="font-semibold text-gray-500">Agentic AI @ UIUC</span>
           </footer>
         </div>
       </AuthProvider>

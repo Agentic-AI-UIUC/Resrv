@@ -62,6 +62,8 @@ async def _agent_tick() -> None:
         await _process_machines()
         await _send_reminders()
         await _expire_grace_period()
+        await _check_time_limits()
+        await _notify_staff_time_limit_no_response()
         await _daily_reset()
         await _compute_daily_analytics()
     except Exception:
@@ -180,6 +182,69 @@ async def _expire_grace_period() -> None:
         # Update pinned embed for this machine
         if _bot is not None:
             await _bot.update_queue_embeds(entry["machine_id"])
+
+
+# --------------------------------------------------------------------------- #
+# Time-limit checks
+# --------------------------------------------------------------------------- #
+
+async def _check_time_limits() -> None:
+    """DM users whose session time limit has expired."""
+    entries = await models.get_entries_past_time_limit()
+    for entry in entries:
+        await models.mark_time_limit_notified(entry["id"])
+        if _bot is None:
+            continue
+        try:
+            from bot.cogs.dm import TimeLimitView
+            user = await _bot.fetch_user(int(entry["discord_id"]))
+            view = TimeLimitView(
+                entry_id=entry["id"],
+                machine_name=entry["machine_name"],
+            )
+            await user.send(
+                content=(
+                    f"Your **{entry['time_limit_minutes']} min** session on "
+                    f"**{entry['machine_name']}** is up! Are you finished?"
+                ),
+                view=view,
+            )
+            log.info(
+                "Time-limit check-in sent to %s (entry %d)",
+                entry["discord_name"], entry["id"],
+            )
+        except discord.NotFound:
+            log.warning("User %s not found — cannot send time-limit DM", entry["discord_id"])
+        except discord.Forbidden:
+            log.warning("User %s has DMs disabled — cannot send time-limit DM", entry["discord_id"])
+        except Exception:
+            log.exception("Failed to send time-limit DM to %s", entry["discord_id"])
+
+
+async def _notify_staff_time_limit_no_response() -> None:
+    """Alert staff channel when a user doesn't respond to a time-limit check-in."""
+    grace_minutes = await get_setting_int("grace_minutes", settings.grace_minutes)
+    entries = await models.get_entries_time_limit_no_response(grace_minutes)
+    for entry in entries:
+        serving_at = datetime.fromisoformat(entry["serving_at"])
+        total_mins = int((datetime.utcnow() - serving_at).total_seconds() / 60)
+        if _bot is not None and settings.admin_channel_id:
+            try:
+                channel = _bot.get_channel(settings.admin_channel_id)
+                if channel is None:
+                    channel = await _bot.fetch_channel(settings.admin_channel_id)
+                await channel.send(
+                    f"⚠️ **{entry['discord_name']}** on "
+                    f"**{entry['machine_name']}** hasn't responded to "
+                    f"time-limit check-in (serving for {total_mins} min)"
+                )
+            except Exception:
+                log.exception("Failed to notify staff channel about %s", entry["discord_name"])
+        await models.clear_time_limit_notification(entry["id"])
+        log.info(
+            "Staff notified: %s on %s no response (%d min)",
+            entry["discord_name"], entry["machine_name"], total_mins,
+        )
 
 
 # --------------------------------------------------------------------------- #

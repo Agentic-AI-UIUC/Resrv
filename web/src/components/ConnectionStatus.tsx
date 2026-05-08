@@ -23,10 +23,10 @@ export function ConnectionStatus() {
   return (
     <div className="flex items-center gap-2 text-sm">
       <span
-        className={`inline-block h-2.5 w-2.5 rounded-full ${connected ? "bg-emerald-500" : "bg-red-500 animate-pulse"}`}
+        className={`inline-block h-2 w-2 rounded-full ${connected ? "bg-[#E84A27] shadow-[0_0_6px_rgba(232,74,39,0.6)]" : "bg-red-400 animate-pulse shadow-[0_0_6px_rgba(248,113,113,0.6)]"}`}
       />
-      <span className={connected ? "text-emerald-700" : "text-red-600"}>
-        {connected ? "Connected to API" : "API unreachable"}
+      <span className={connected ? "text-orange-200" : "text-red-300"}>
+        {connected ? "Live" : "Offline"}
       </span>
     </div>
   );

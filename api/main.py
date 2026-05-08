@@ -9,8 +9,12 @@ handles that so it can co-ordinate with the Discord bot and queue agent.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from api.routes.analytics import router as analytics_router
 from api.routes.auth import router as auth_router
@@ -61,3 +65,18 @@ app.include_router(pinned_charts_router)
 @app.get("/api/health")
 async def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# ── Serve frontend SPA (production) ─────────────────────────────────────
+
+_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
+
+if _DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="static")
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str) -> FileResponse:
+        file = _DIST / full_path
+        if file.is_file():
+            return FileResponse(file)
+        return FileResponse(_DIST / "index.html")

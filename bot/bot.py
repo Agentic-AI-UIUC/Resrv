@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
@@ -81,6 +82,10 @@ class ReservBot(commands.Bot):
     async def on_ready(self) -> None:
         """Fires when the bot has connected and the cache is populated."""
         log.info("ReservBot ready as %s (ID: %s)", self.user, self.user.id)  # type: ignore[union-attr]
+
+        if self.embed_messages:
+            log.info("on_ready fired again (reconnect) — skipping embed post")
+            return
 
         # Post or refresh pinned queue embeds
         await self._post_queue_embeds()
@@ -225,13 +230,23 @@ class ReservBot(commands.Bot):
             log.info("Posted embed for %s (msg %d)", machine["name"], msg.id)
 
         # Reconcile archived machines: delete lingering embeds
+        all_machines = await models.list_machines(include_archived=True)
         archived = [
-            m for m in await models.list_machines(include_archived=True)
+            m for m in all_machines
             if m.get("archived_at") is not None and m.get("embed_message_id")
         ]
+        active_msg_ids = set(self.embed_messages.values())
         for machine in archived:
+            mid = int(machine["embed_message_id"])
+            if mid in active_msg_ids:
+                log.warning(
+                    "Skipping delete of msg %d for archived %s — "
+                    "it belongs to an active machine!",
+                    mid, machine["name"],
+                )
+                continue
             try:
-                msg = await channel.fetch_message(int(machine["embed_message_id"]))
+                msg = await channel.fetch_message(mid)
                 await msg.delete()
                 log.info("Cleaned up stale embed for archived %s", machine["name"])
             except (discord.NotFound, discord.HTTPException):

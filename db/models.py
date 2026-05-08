@@ -75,6 +75,7 @@ async def update_machine(
     name: str | None = None,
     slug: str | None = None,
     status: str | None = None,
+    time_limit_minutes: int | None = ...,
 ) -> None:
     sets: list[str] = []
     params: list[Any] = []
@@ -97,6 +98,11 @@ async def update_machine(
     if status is not None:
         sets.append("status = ?")
         params.append(status)
+    if time_limit_minutes is not ...:
+        if time_limit_minutes is not None and time_limit_minutes <= 0:
+            time_limit_minutes = None
+        sets.append("time_limit_minutes = ?")
+        params.append(time_limit_minutes)
     if not sets:
         return
     params.append(machine_id)
@@ -600,10 +606,11 @@ async def get_user_active_entries(user_id: int) -> list[dict[str, Any]]:
     return _rows_to_dicts(await cursor.fetchall())
 
 
-async def join_queue(user_id: int, machine_id: int) -> dict[str, Any]:
+async def join_queue(
+    user_id: int, machine_id: int, *, purpose: str = "production"
+) -> dict[str, Any]:
     """Add user to the end of a machine's queue. Returns the new entry."""
     db = await get_db()
-    # Get next position
     cursor = await db.execute(
         """
         SELECT COALESCE(MAX(position), 0) + 1 AS next_pos
@@ -617,11 +624,11 @@ async def join_queue(user_id: int, machine_id: int) -> dict[str, Any]:
 
     cursor = await db.execute(
         """
-        INSERT INTO queue_entries (user_id, machine_id, status, position)
-        VALUES (?, ?, 'waiting', ?)
+        INSERT INTO queue_entries (user_id, machine_id, status, position, purpose)
+        VALUES (?, ?, 'waiting', ?, ?)
         RETURNING *
         """,
-        (user_id, machine_id, next_pos),
+        (user_id, machine_id, next_pos, purpose),
     )
     entry = dict(await cursor.fetchone())
     await db.commit()
@@ -667,6 +674,38 @@ async def update_entry_status(
     await db.commit()
 
 
+async def undo_last_removal(machine_id: int) -> dict[str, Any] | None:
+    """Restore the most recently cancelled entry for a machine today."""
+    db = await get_db()
+    cursor = await db.execute(
+        """
+        SELECT qe.*, u.discord_id, u.discord_name
+        FROM queue_entries qe
+        JOIN users u ON u.id = qe.user_id
+        WHERE qe.machine_id = ?
+          AND qe.status = 'cancelled'
+          AND date(qe.joined_at) = date('now')
+        ORDER BY qe.completed_at DESC
+        LIMIT 1
+        """,
+        (machine_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    entry = dict(row)
+    await db.execute(
+        """
+        UPDATE queue_entries
+        SET status = 'waiting', completed_at = NULL
+        WHERE id = ?
+        """,
+        (entry["id"],),
+    )
+    await db.commit()
+    return entry
+
+
 async def bump_entry_to_top(entry_id: int, machine_id: int) -> None:
     """Move an entry to position 0 (top of queue)."""
     db = await get_db()
@@ -684,6 +723,15 @@ async def bump_entry_to_top(entry_id: int, machine_id: int) -> None:
         "UPDATE queue_entries SET position = 1 WHERE id = ?", (entry_id,)
     )
     await db.commit()
+
+
+async def get_queue_entry(entry_id: int) -> dict[str, Any] | None:
+    """Get a single queue entry by primary key."""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM queue_entries WHERE id = ?", (entry_id,)
+    )
+    return _row_to_dict(await cursor.fetchone())
 
 
 async def get_serving_entry(machine_id: int) -> dict[str, Any] | None:
@@ -767,6 +815,103 @@ async def mark_reminded(entry_id: int) -> None:
         "UPDATE queue_entries SET reminded = 1 WHERE id = ?", (entry_id,)
     )
     await db.commit()
+
+
+async def get_entries_past_time_limit() -> list[dict[str, Any]]:
+    """Serving entries whose machine has a time_limit_minutes and the deadline has passed."""
+    db = await get_db()
+    cursor = await db.execute(
+        """
+        SELECT qe.*, u.discord_id, u.discord_name, m.name AS machine_name,
+               m.time_limit_minutes
+        FROM queue_entries qe
+        JOIN users u    ON u.id = qe.user_id
+        JOIN machines m ON m.id = qe.machine_id
+        WHERE qe.status = 'serving'
+          AND m.time_limit_minutes IS NOT NULL
+          AND qe.time_limit_notified_at IS NULL
+          AND (
+              CASE
+                  WHEN qe.extended_until IS NOT NULL
+                  THEN datetime('now') >= qe.extended_until
+                  ELSE (julianday('now') - julianday(qe.serving_at)) * 24 * 60
+                       >= m.time_limit_minutes
+              END
+          )
+        """,
+    )
+    return _rows_to_dicts(await cursor.fetchall())
+
+
+async def mark_time_limit_notified(entry_id: int) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE queue_entries SET time_limit_notified_at = datetime('now') WHERE id = ?",
+        (entry_id,),
+    )
+    await db.commit()
+
+
+async def extend_entry_time(entry_id: int, extra_minutes: int) -> None:
+    db = await get_db()
+    await db.execute(
+        """
+        UPDATE queue_entries
+        SET extended_until = datetime('now', '+' || ? || ' minutes'),
+            time_limit_notified_at = NULL
+        WHERE id = ?
+        """,
+        (extra_minutes, entry_id),
+    )
+    await db.commit()
+
+
+async def get_entries_time_limit_no_response(grace_minutes: int) -> list[dict[str, Any]]:
+    """Entries that were time-limit-notified but haven't responded within grace_minutes."""
+    db = await get_db()
+    cursor = await db.execute(
+        """
+        SELECT qe.*, u.discord_id, u.discord_name, m.name AS machine_name,
+               m.time_limit_minutes
+        FROM queue_entries qe
+        JOIN users u    ON u.id = qe.user_id
+        JOIN machines m ON m.id = qe.machine_id
+        WHERE qe.status = 'serving'
+          AND qe.time_limit_notified_at IS NOT NULL
+          AND (julianday('now') - julianday(qe.time_limit_notified_at)) * 24 * 60 >= ?
+        """,
+        (grace_minutes,),
+    )
+    return _rows_to_dicts(await cursor.fetchall())
+
+
+async def clear_time_limit_notification(entry_id: int) -> None:
+    db = await get_db()
+    await db.execute(
+        "UPDATE queue_entries SET time_limit_notified_at = NULL WHERE id = ?",
+        (entry_id,),
+    )
+    await db.commit()
+
+
+async def get_avg_serve_minutes(machine_id: int, days: int = 14) -> float | None:
+    db = await get_db()
+    cursor = await db.execute(
+        """
+        SELECT AVG(
+            (julianday(qe.completed_at) - julianday(qe.serving_at)) * 24 * 60
+        ) AS avg_mins
+        FROM queue_entries qe
+        WHERE qe.machine_id = ?
+          AND qe.status = 'completed'
+          AND qe.serving_at IS NOT NULL
+          AND qe.completed_at IS NOT NULL
+          AND date(qe.joined_at) >= date('now', '-' || ? || ' days')
+        """,
+        (machine_id, days),
+    )
+    row = await cursor.fetchone()
+    return row["avg_mins"] if row and row["avg_mins"] is not None else None
 
 
 async def set_join_dm_message_id(entry_id: int, message_id: int) -> None:

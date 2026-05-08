@@ -592,6 +592,113 @@ class FeedbackModal(discord.ui.Modal, title="Tell us more (optional)"):
 
 
 # --------------------------------------------------------------------------- #
+# Time-limit check-in flow
+# --------------------------------------------------------------------------- #
+
+
+class TimeLimitView(discord.ui.View):
+    """Check-in sent when a user's session time limit expires."""
+
+    def __init__(self, *, entry_id: int, machine_name: str) -> None:
+        super().__init__(timeout=600)
+        self._entry_id = entry_id
+        self._machine_name = machine_name
+
+    def _disable_all(self) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+
+    async def _finish(self, interaction: discord.Interaction) -> None:
+        entry = await models.get_queue_entry(self._entry_id)
+        if entry is None or entry["status"] != "serving":
+            await interaction.response.send_message(
+                "This session has already ended.", ephemeral=True,
+            )
+            return
+        await models.update_entry_status(self._entry_id, "completed")
+        self._disable_all()
+        await interaction.response.edit_message(
+            content=f"Session on **{self._machine_name}** marked as finished. Thanks!",
+            view=self,
+        )
+        try:
+            await send_rating_dm(
+                interaction.user,
+                queue_entry_id=self._entry_id,
+                machine_name=self._machine_name,
+            )
+        except Exception:
+            log.exception("rating DM after time-limit finish failed")
+
+    async def _extend(self, interaction: discord.Interaction, minutes: int) -> None:
+        entry = await models.get_queue_entry(self._entry_id)
+        if entry is None or entry["status"] != "serving":
+            await interaction.response.send_message(
+                "This session has already ended.", ephemeral=True,
+            )
+            return
+        await models.extend_entry_time(self._entry_id, minutes)
+        self._disable_all()
+        await interaction.response.edit_message(
+            content=(
+                f"Got it — extended your session on **{self._machine_name}** "
+                f"by {minutes} minutes. We'll check in again when that's up."
+            ),
+            view=self,
+        )
+
+    @discord.ui.button(label="I'm finished", style=discord.ButtonStyle.success, row=0)
+    async def btn_finish(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._finish(interaction)
+
+    @discord.ui.button(label="15 min", style=discord.ButtonStyle.secondary, row=0)
+    async def btn_15(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._extend(interaction, 15)
+
+    @discord.ui.button(label="30 min", style=discord.ButtonStyle.secondary, row=0)
+    async def btn_30(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._extend(interaction, 30)
+
+    @discord.ui.button(label="1 hour", style=discord.ButtonStyle.secondary, row=0)
+    async def btn_60(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._extend(interaction, 60)
+
+    @discord.ui.button(label="Other...", style=discord.ButtonStyle.primary, row=1)
+    async def btn_other(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(
+            ExtensionModal(entry_id=self._entry_id, machine_name=self._machine_name, parent_view=self)
+        )
+
+
+class ExtensionModal(discord.ui.Modal, title="Extend your session"):
+    minutes_input = discord.ui.TextInput(
+        label="How many more minutes do you need?",
+        placeholder="e.g. 45",
+        min_length=1,
+        max_length=4,
+    )
+
+    def __init__(self, *, entry_id: int, machine_name: str, parent_view: TimeLimitView) -> None:
+        super().__init__()
+        self._entry_id = entry_id
+        self._machine_name = machine_name
+        self._parent_view = parent_view
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            minutes = int(self.minutes_input.value.strip())
+            if minutes < 1 or minutes > 480:
+                raise ValueError()
+        except ValueError:
+            await interaction.response.send_message(
+                "Please enter a number between 1 and 480.", ephemeral=True,
+            )
+            return
+        await self._parent_view._extend(interaction, minutes)
+
+
+# --------------------------------------------------------------------------- #
 # Extension setup
 # --------------------------------------------------------------------------- #
 

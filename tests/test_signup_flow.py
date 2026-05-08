@@ -23,19 +23,24 @@ def fake_interaction():
     inter.user.send = AsyncMock()
     inter.response.send_message = AsyncMock()
     inter.response.send_modal = AsyncMock()
+    inter.response.defer = AsyncMock()
+    inter.response.is_done.return_value = False
+    inter.delete_original_response = AsyncMock()
+    inter.followup.send = AsyncMock()
     return inter
 
 
 async def test_unregistered_user_sees_select_view_not_modal(
     db, fake_bot, fake_interaction
 ):
-    """First-time Join Queue should send the CollegeSelectView, NOT the modal."""
+    """First-time Join Queue should DM the CollegeSelectView, NOT the modal."""
     cog = QueueCog(fake_bot)
     machine = await models.create_machine(name="X", slug="x")
     await cog._handle_join(fake_interaction, machine["id"])
 
-    fake_interaction.response.send_message.assert_awaited_once()
-    args, kwargs = fake_interaction.response.send_message.call_args
+    fake_interaction.response.defer.assert_awaited_once()
+    fake_interaction.user.send.assert_awaited_once()
+    args, kwargs = fake_interaction.user.send.call_args
     assert isinstance(kwargs["view"], CollegeSelectView)
     fake_interaction.response.send_modal.assert_not_called()
 
@@ -106,7 +111,7 @@ async def test_resignup_prefills_existing_values(
     cog = QueueCog(fake_bot)
     await cog._handle_join(fake_interaction, machine["id"])
 
-    args, kwargs = fake_interaction.response.send_message.call_args
+    args, kwargs = fake_interaction.user.send.call_args
     view = kwargs["view"]
     assert view._prefill["full_name"] == "Prior Name"
     assert view._prefill["email"] == "prior@illinois.edu"
@@ -123,6 +128,6 @@ async def test_empty_colleges_list_shows_unavailable_message(
     cog = QueueCog(fake_bot)
     await cog._handle_join(fake_interaction, machine["id"])
 
-    args, kwargs = fake_interaction.response.send_message.call_args
+    args, kwargs = fake_interaction.user.send.call_args
     msg = args[0] if args else kwargs.get("content", "")
     assert "temporarily unavailable" in msg.lower()

@@ -19,6 +19,7 @@ from db.models import (
     list_units,
     update_entry_status,
     bump_entry_to_top,
+    undo_last_removal,
 )
 
 router = APIRouter(prefix="/api/queue", tags=["queue"])
@@ -41,6 +42,7 @@ class QueueEntryOut(BaseModel):
     unit_id: int | None = None
     discord_id: str | None = None
     discord_name: str | None = None
+    purpose: str = "production"
 
 
 class UnitSummary(BaseModel):
@@ -210,6 +212,38 @@ async def complete_entry(entry_id: int, body: CompleteRequest) -> dict:
     await update_entry_status(entry_id, "completed", **extra)
     notify_embed_update(entry["machine_id"])
     return await _get_entry_or_404(entry_id)
+
+
+@router.post("/{machine_id}/undo", response_model=QueueEntryOut)
+async def undo_removal(machine_id: int) -> dict:
+    """Undo the last removal for a machine. Restores the entry and DMs the user."""
+    machine = await get_machine(machine_id)
+    if machine is None:
+        raise HTTPException(status_code=404, detail="Machine not found")
+
+    entry = await undo_last_removal(machine_id)
+    if entry is None:
+        raise HTTPException(
+            status_code=404, detail="No recent removal to undo"
+        )
+
+    notify_embed_update(machine_id)
+
+    from api.deps import bot
+    if bot and entry.get("discord_id"):
+        import asyncio
+        try:
+            async def _send_sorry():
+                user = bot.get_user(int(entry["discord_id"])) or await bot.fetch_user(int(entry["discord_id"]))
+                await user.send(
+                    f"Sorry about that! You've been re-added to the queue for "
+                    f"**{machine['name']}**."
+                )
+            asyncio.run_coroutine_threadsafe(_send_sorry(), bot.loop)
+        except Exception:
+            pass
+
+    return await _get_entry_or_404(entry["id"])
 
 
 @router.post("/{entry_id}/bump", response_model=QueueEntryOut)

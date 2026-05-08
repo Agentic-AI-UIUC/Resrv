@@ -19,6 +19,32 @@ log = logging.getLogger(__name__)
 _ILLINOIS_EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+-]+@illinois\.edu$", re.IGNORECASE)
 
 
+async def _defer_and_dm(
+    interaction: discord.Interaction,
+    content: str,
+    *,
+    view: discord.ui.View | None = None,
+) -> None:
+    """Acknowledge the channel interaction silently and reply via DM."""
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    try:
+        kwargs: dict = {}
+        if view is not None:
+            kwargs["view"] = view
+        await interaction.user.send(content, **kwargs)
+    except discord.Forbidden:
+        log.warning(
+            "Cannot DM user %s (%s) -- falling back to ephemeral",
+            interaction.user.display_name,
+            interaction.user.id,
+        )
+        kwargs_fb: dict = {"ephemeral": True}
+        if view is not None:
+            kwargs_fb["view"] = view
+        await interaction.followup.send(content, **kwargs_fb)
+
+
 async def _join_and_dm(
     *,
     interaction: discord.Interaction,
@@ -26,16 +52,15 @@ async def _join_and_dm(
     user_id: int,
     machine_id: int,
     machine_name: str,
+    purpose: str = "production",
     confirmation_prefix: str = "You joined the queue for",
 ) -> None:
-    """Join the queue + send ephemeral + capture join-DM with live rank.
+    """Join the queue and send a DM with live rank."""
+    entry = await models.join_queue(user_id, machine_id, purpose=purpose)
 
-    Centralises the post-join boilerplate that used to live in both
-    SignupModal.on_submit and _handle_join. Live rank is computed from the
-    waiting list (queue_entries.position is a join-time stamp and may
-    over-count rows from earlier today).
-    """
-    entry = await models.join_queue(user_id, machine_id)
+    if purpose == "training":
+        await models.bump_entry_to_top(entry["id"], machine_id)
+
     queue = await models.get_queue_for_machine(machine_id)
     waiting = [e for e in queue if e["status"] == "waiting"]
     position = next(
@@ -44,22 +69,81 @@ async def _join_and_dm(
     )
     waiting_count = len(waiting)
 
-    await interaction.response.send_message(
-        f"{confirmation_prefix} **{machine_name}**!\n"
-        f"Your position: **#{position}** ({waiting_count} waiting)",
-        ephemeral=True,
-    )
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+
     await bot.update_queue_embeds(machine_id)
 
+    purpose_label = " (Training)" if purpose == "training" else ""
     try:
         msg = await interaction.user.send(
-            f"You're **#{position}** in the queue for **{machine_name}**. "
-            f"I'll edit this message as the queue moves and DM you again when "
+            f"{confirmation_prefix} **{machine_name}**{purpose_label}!\n"
+            f"Your position: **#{position}** ({waiting_count} waiting).\n"
+            f"I'll update this message as the queue moves and DM you again when "
             f"it's your turn."
         )
         await models.set_join_dm_message_id(entry["id"], msg.id)
     except discord.Forbidden:
-        pass
+        log.warning(
+            "Cannot DM user %s (%s) -- falling back to ephemeral",
+            interaction.user.display_name,
+            interaction.user.id,
+        )
+        await interaction.followup.send(
+            f"{confirmation_prefix} **{machine_name}**{purpose_label}!\n"
+            f"Your position: **#{position}** ({waiting_count} waiting)",
+            ephemeral=True,
+        )
+
+
+class PurposeSelectView(discord.ui.View):
+    """DM view with Training / Production buttons shown before joining the queue."""
+
+    def __init__(
+        self,
+        *,
+        bot: "ReservBot",
+        user_id: int,
+        machine_id: int,
+        machine_name: str,
+        confirmation_prefix: str = "You joined the queue for",
+    ) -> None:
+        super().__init__(timeout=120)
+        self._bot = bot
+        self._user_id = user_id
+        self._machine_id = machine_id
+        self._machine_name = machine_name
+        self._confirmation_prefix = confirmation_prefix
+
+    async def _join(self, interaction: discord.Interaction, purpose: str) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        await interaction.response.edit_message(
+            content=f"Selected **{purpose.capitalize()}**. Joining queue...",
+            view=self,
+        )
+        await _join_and_dm(
+            interaction=interaction,
+            bot=self._bot,
+            user_id=self._user_id,
+            machine_id=self._machine_id,
+            machine_name=self._machine_name,
+            purpose=purpose,
+            confirmation_prefix=self._confirmation_prefix,
+        )
+
+    @discord.ui.button(label="Production", style=discord.ButtonStyle.green)
+    async def production(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await self._join(interaction, "production")
+
+    @discord.ui.button(label="Training", style=discord.ButtonStyle.blurple)
+    async def training(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await self._join(interaction, "training")
 
 
 class VerificationModal(discord.ui.Modal, title="SCD Queue — Email Verification"):
@@ -103,10 +187,10 @@ class VerificationModal(discord.ui.Modal, title="SCD Queue — Email Verificatio
             self._discord_id, self.code.value.strip()
         )
         if not ok:
-            await interaction.response.send_message(
+            await _defer_and_dm(
+                interaction,
                 "Wrong or expired code. Click **Join Queue** again to request "
                 "a new one.",
-                ephemeral=True,
             )
             return
 
@@ -122,24 +206,21 @@ class VerificationModal(discord.ui.Modal, title="SCD Queue — Email Verificatio
         )
         machine = await models.get_machine(self._machine_id)
         if machine is None:
-            await interaction.response.send_message(
-                "Machine not found.", ephemeral=True
-            )
+            await _defer_and_dm(interaction, "Machine not found.")
             return
 
         existing = await models.get_user_active_entry(
             self._user_id, self._machine_id
         )
         if existing is not None:
-            await interaction.response.send_message(
+            await _defer_and_dm(
+                interaction,
                 f"You're verified! You're already in the queue for "
                 f"**{machine['name']}**.",
-                ephemeral=True,
             )
             return
 
-        await _join_and_dm(
-            interaction=interaction,
+        purpose_view = PurposeSelectView(
             bot=self._bot,
             user_id=self._user_id,
             machine_id=self._machine_id,
@@ -148,15 +229,19 @@ class VerificationModal(discord.ui.Modal, title="SCD Queue — Email Verificatio
                 "Verified! You're registered and joined the queue for"
             ),
         )
+        await _defer_and_dm(
+            interaction,
+            f"Are you using **{machine['name']}** for training or production?",
+            view=purpose_view,
+        )
 
 
 class VerificationLaunchView(discord.ui.View):
-    """Single-button ephemeral view that opens VerificationModal on click.
+    """Single-button view (sent via DM) that opens VerificationModal on click.
 
     Discord forbids opening a modal as the response to a modal submission,
-    so we hand SignupModal an ephemeral message + button. The button's
-    click is a MessageComponent interaction, which IS allowed to send a
-    modal in response.
+    so we hand SignupModal a DM message + button. The button's click is a
+    MessageComponent interaction, which IS allowed to send a modal in response.
     """
 
     def __init__(
@@ -245,7 +330,7 @@ class _LeaveServingButton(discord.ui.Button):
 
 
 class LeaveServingView(discord.ui.View):
-    """Ephemeral two-button choice when a serving user clicks Leave Queue."""
+    """DM two-button choice when a serving user clicks Leave Queue."""
 
     def __init__(self, *, bot: "ReservBot", entry_id: int, machine_id: int,
                   machine_name: str) -> None:
@@ -289,7 +374,7 @@ class _CollegeSelect(discord.ui.Select):
 
 
 class CollegeSelectView(discord.ui.View):
-    """Ephemeral view shown before the signup modal — picks a UIUC college."""
+    """View sent via DM before the signup modal -- picks a UIUC college."""
 
     def __init__(
         self,
@@ -401,27 +486,25 @@ class SignupModal(discord.ui.Modal, title="SCD Queue — Sign Up"):
 
         email_val = self.email.value.strip()
         if not _ILLINOIS_EMAIL_RE.match(email_val):
-            await interaction.response.send_message(
-                "Please enter a valid **@illinois.edu** email.", ephemeral=True
+            await _defer_and_dm(
+                interaction,
+                "Please enter a valid **@illinois.edu** email.",
             )
             return
 
         year_val = self.graduation_year.value.strip()
         if not year_val.isdigit() or not (2024 <= int(year_val) <= 2035):
-            await interaction.response.send_message(
-                "Graduation year must be between 2024 and 2035.", ephemeral=True
+            await _defer_and_dm(
+                interaction,
+                "Graduation year must be between 2024 and 2035.",
             )
             return
 
         machine = await models.get_machine(self._machine_id)
         if machine is None:
-            await interaction.response.send_message(
-                "Machine not found.", ephemeral=True
-            )
+            await _defer_and_dm(interaction, "Machine not found.")
             return
 
-        # Gate: skip verification under public_mode or for already-verified
-        # users whose email hasn't changed. Otherwise issue + send a code.
         public_mode = (await get_setting("public_mode")) == "true"
         existing_user = await models.get_user_by_discord_id(
             str(interaction.user.id)
@@ -445,14 +528,13 @@ class SignupModal(discord.ui.Modal, title="SCD Queue — Sign Up"):
                 self._user_id, self._machine_id
             )
             if existing is not None:
-                await interaction.response.send_message(
+                await _defer_and_dm(
+                    interaction,
                     f"You're registered! You're already in the queue for "
                     f"**{machine['name']}**.",
-                    ephemeral=True,
                 )
                 return
-            await _join_and_dm(
-                interaction=interaction,
+            purpose_view = PurposeSelectView(
                 bot=self._bot,
                 user_id=self._user_id,
                 machine_id=self._machine_id,
@@ -461,31 +543,30 @@ class SignupModal(discord.ui.Modal, title="SCD Queue — Sign Up"):
                     "Welcome! You're registered and joined the queue for"
                 ),
             )
+            await _defer_and_dm(
+                interaction,
+                f"Are you using **{machine['name']}** for training or production?",
+                view=purpose_view,
+            )
             return
 
-        # Verification path — defer registration + queue join until the user
-        # enters the code in the VerificationModal. This means an abandoned
-        # signup never lands as registered=1 with a join slot held.
         try:
             code = await ev.issue_code(str(interaction.user.id), email_val)
             await ev.send_verification_email(email_val, code)
         except ev.VerificationRateLimitError:
-            await interaction.response.send_message(
+            await _defer_and_dm(
+                interaction,
                 "Too many verification requests. Try again in an hour, or "
                 "ask staff for help.",
-                ephemeral=True,
             )
             return
         except ev.EmailSendError:
-            await interaction.response.send_message(
+            await _defer_and_dm(
+                interaction,
                 "Verification is temporarily unavailable. Please ask staff.",
-                ephemeral=True,
             )
             return
 
-        # Discord forbids modal-from-modal — hand the user a button that
-        # opens the VerificationModal when clicked (MessageComponent
-        # interactions can send modals in response).
         view = VerificationLaunchView(
             bot=self._bot,
             user_id=self._user_id,
@@ -497,11 +578,12 @@ class SignupModal(discord.ui.Modal, title="SCD Queue — Sign Up"):
             major=self.major.value.strip(),
             graduation_year=year_val,
         )
-        await interaction.response.send_message(
+        await _defer_and_dm(
+            interaction,
             f"We sent a 6-digit code to **{email_val}**. "
+            f"Check your **spam/junk** folder if you don't see it!\n"
             f"Click the button below to enter it.",
             view=view,
-            ephemeral=True,
         )
 
 
@@ -550,26 +632,22 @@ class QueueCog(commands.Cog):
         """Add the user to the specified machine's queue."""
         machine = await models.get_machine(machine_id)
         if machine is None:
-            await interaction.response.send_message(
-                "Machine not found.", ephemeral=True
-            )
+            await _defer_and_dm(interaction, "Machine not found.")
             return
 
         if machine["status"] != "active":
-            await interaction.response.send_message(
+            await _defer_and_dm(
+                interaction,
                 f"**{machine['name']}** is not currently accepting new entries "
                 f"(status: {machine['status']}).",
-                ephemeral=True,
             )
             return
 
-        # Get or create the user record
         user = await models.get_or_create_user(
             discord_id=str(interaction.user.id),
             discord_name=interaction.user.display_name,
         )
 
-        # Registration gate — show college select view (then modal) if not registered
         if not user.get("registered"):
             prefill_dict = None
             has_any = any([
@@ -590,34 +668,36 @@ class QueueCog(commands.Cog):
                 prefill=prefill_dict,
             )
             if not view.children or not view.children[0].options:
-                await interaction.response.send_message(
+                await _defer_and_dm(
+                    interaction,
                     "Sign-ups are temporarily unavailable — please contact staff.",
-                    ephemeral=True,
                 )
                 return
-            await interaction.response.send_message(
-                "Pick your UIUC college:", view=view, ephemeral=True,
+            await _defer_and_dm(
+                interaction,
+                "Pick your UIUC college:",
+                view=view,
             )
             return
 
-        # Check for duplicate active entry
         existing = await models.get_user_active_entry(user["id"], machine_id)
         if existing is not None:
-            await interaction.response.send_message(
+            await _defer_and_dm(
+                interaction,
                 f"You are already in the queue for **{machine['name']}**.",
-                ephemeral=True,
             )
             return
 
-        # Already-registered users go straight to the queue — verification
-        # is sticky and the gate already ran at signup time.
-        await _join_and_dm(
-            interaction=interaction,
+        view = PurposeSelectView(
             bot=self.bot,
             user_id=user["id"],
             machine_id=machine_id,
             machine_name=machine["name"],
-            confirmation_prefix="You joined the queue for",
+        )
+        await _defer_and_dm(
+            interaction,
+            f"Are you using **{machine['name']}** for training or production?",
+            view=view,
         )
 
     # --------------------------------------------------------------------- #
@@ -630,34 +710,31 @@ class QueueCog(commands.Cog):
         """Tell the user their current position (or that they're not in queue)."""
         machine = await models.get_machine(machine_id)
         if machine is None:
-            await interaction.response.send_message(
-                "Machine not found.", ephemeral=True
-            )
+            await _defer_and_dm(interaction, "Machine not found.")
             return
 
         user = await models.get_user_by_discord_id(str(interaction.user.id))
         if user is None:
-            await interaction.response.send_message(
+            await _defer_and_dm(
+                interaction,
                 f"You are not in the queue for **{machine['name']}**.",
-                ephemeral=True,
             )
             return
 
         entry = await models.get_user_active_entry(user["id"], machine_id)
         if entry is None:
-            await interaction.response.send_message(
+            await _defer_and_dm(
+                interaction,
                 f"You are not in the queue for **{machine['name']}**.",
-                ephemeral=True,
             )
             return
 
         if entry["status"] == "serving":
-            await interaction.response.send_message(
+            await _defer_and_dm(
+                interaction,
                 f"You are currently being **served** at **{machine['name']}**!",
-                ephemeral=True,
             )
         else:
-            # Count how many people are ahead
             queue = await models.get_queue_for_machine(machine_id)
             waiting = [e for e in queue if e["status"] == "waiting"]
             pos = next(
@@ -669,15 +746,15 @@ class QueueCog(commands.Cog):
                 None,
             )
             if pos is not None:
-                await interaction.response.send_message(
+                await _defer_and_dm(
+                    interaction,
                     f"You are **#{pos}** in the queue for **{machine['name']}** "
                     f"({len(waiting)} waiting).",
-                    ephemeral=True,
                 )
             else:
-                await interaction.response.send_message(
+                await _defer_and_dm(
+                    interaction,
                     f"You are not in the queue for **{machine['name']}**.",
-                    ephemeral=True,
                 )
 
     # --------------------------------------------------------------------- #
@@ -690,24 +767,22 @@ class QueueCog(commands.Cog):
         """Remove the user from the queue."""
         machine = await models.get_machine(machine_id)
         if machine is None:
-            await interaction.response.send_message(
-                "Machine not found.", ephemeral=True
-            )
+            await _defer_and_dm(interaction, "Machine not found.")
             return
 
         user = await models.get_user_by_discord_id(str(interaction.user.id))
         if user is None:
-            await interaction.response.send_message(
+            await _defer_and_dm(
+                interaction,
                 f"You are not in the queue for **{machine['name']}**.",
-                ephemeral=True,
             )
             return
 
         entry = await models.get_user_active_entry(user["id"], machine_id)
         if entry is None:
-            await interaction.response.send_message(
+            await _defer_and_dm(
+                interaction,
                 f"You are not in the queue for **{machine['name']}**.",
-                ephemeral=True,
             )
             return
 
@@ -718,35 +793,22 @@ class QueueCog(commands.Cog):
                 machine_id=machine_id,
                 machine_name=machine["name"],
             )
-            await interaction.response.send_message(
+            await _defer_and_dm(
+                interaction,
                 f"Are you finishing your session on **{machine['name']}** "
                 f"or cancelling?",
                 view=view,
-                ephemeral=True,
             )
             return
 
         await models.leave_queue(entry["id"])
 
-        await interaction.response.send_message(
+        await _defer_and_dm(
+            interaction,
             f"You have left the queue for **{machine['name']}**.",
-            ephemeral=True,
         )
 
-        # Update the pinned embed
         await self.bot.update_queue_embeds(machine_id)
-
-        # DM confirmation
-        try:
-            await interaction.user.send(
-                f"You've been removed from the **{machine['name']}** queue."
-            )
-        except discord.Forbidden:
-            log.warning(
-                "Cannot DM user %s (%s) -- DMs disabled",
-                interaction.user.display_name,
-                interaction.user.id,
-            )
 
 
 async def setup(bot: ReservBot) -> None:

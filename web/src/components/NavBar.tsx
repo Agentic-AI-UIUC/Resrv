@@ -10,24 +10,24 @@ export function NavBar() {
   const isAdmin = role === "admin";
 
   const linkClass = (path: string) =>
-    `px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+    `px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 ${
       pathname === path
-        ? "bg-indigo-100 text-indigo-700"
-        : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+        ? "bg-white/20 text-white shadow-sm"
+        : "text-blue-200 hover:text-white hover:bg-white/10"
     }`;
 
   const inAdmin = pathname.startsWith("/admin");
 
   return (
-    <header className="bg-white border-b border-gray-200 shadow-sm">
+    <header className="bg-[#13294B] shadow-lg">
       <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-6">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
+              <h1 className="text-2xl font-bold text-white tracking-tight">
                 Reserv
               </h1>
-              <p className="text-sm text-gray-500">SCD Queue Management</p>
+              <p className="text-xs text-blue-300">SCD Queue Management</p>
             </div>
             <nav className="flex gap-1">
               <Link to="/" className={linkClass("/")}>
@@ -43,8 +43,8 @@ export function NavBar() {
                   to="/admin/machines"
                   className={
                     inAdmin
-                      ? "px-3 py-1.5 rounded-lg text-sm font-medium bg-indigo-100 text-indigo-700"
-                      : "px-3 py-1.5 rounded-lg text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                      ? "px-3 py-1.5 rounded-lg text-sm font-medium bg-white/20 text-white shadow-sm"
+                      : "px-3 py-1.5 rounded-lg text-sm font-medium text-blue-200 hover:text-white hover:bg-white/10 transition-all duration-200"
                   }
                 >
                   Admin
@@ -56,13 +56,13 @@ export function NavBar() {
             <ConnectionStatus />
             {username ? (
               <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-600">
+                <span className="text-sm text-blue-100">
                   {username}
-                  <span className="ml-1 text-xs text-gray-400">({role})</span>
+                  <span className="ml-1 text-xs text-blue-300">({role})</span>
                 </span>
                 <button
                   onClick={() => runTour(navigate, isAdmin)}
-                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-sm font-medium text-white hover:bg-white/20 transition-all duration-200"
                   title="Replay the onboarding tour"
                 >
                   Replay tour
@@ -72,7 +72,7 @@ export function NavBar() {
                     logout();
                     navigate("/");
                   }}
-                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-sm font-medium text-white hover:bg-white/20 transition-all duration-200"
                 >
                   Logout
                 </button>
@@ -80,7 +80,7 @@ export function NavBar() {
             ) : (
               <Link
                 to="/login"
-                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+                className="rounded-lg bg-[#E84A27] px-3 py-1.5 text-sm font-semibold text-white hover:bg-[#d4421f] shadow-sm transition-all duration-200"
               >
                 Staff Login
               </Link>
@@ -88,7 +88,7 @@ export function NavBar() {
           </div>
         </div>
         {inAdmin && username && (
-          <nav className="mt-3 flex gap-1 border-t border-gray-100 pt-3">
+          <nav className="mt-3 flex gap-1 border-t border-white/15 pt-3">
             <Link to="/admin/machines" className={linkClass("/admin/machines")}>
               Machines
             </Link>
